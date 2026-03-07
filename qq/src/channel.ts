@@ -1235,6 +1235,8 @@ function extractImageUrlsFromText(text: string): { cleanText: string; imageUrls:
         const imgUrl = match[0].trim();
         if (imgUrl && !imageUrls.includes(imgUrl)) imageUrls.push(imgUrl);
     }
+    // Remove bare image URLs from text so they never leak as plain text
+    cleanText = cleanText.replace(/(?<!\()https?:\/\/[^\s<>"')\]]+\.(?:jpg|jpeg|png|gif|webp|bmp)(?:\?[^\s<>"')\]]*)?/gi, '').trim();
 
     // Extract from known image hosts
     for (const pattern of hostPatterns) {
@@ -1243,6 +1245,15 @@ function extractImageUrlsFromText(text: string): { cleanText: string; imageUrls:
             if (imgUrl && !imageUrls.includes(imgUrl)) imageUrls.push(imgUrl);
         }
     }
+    // Remove known image host URLs from text too
+    for (const pattern of [
+        /https?:\/\/[^\s<>"')\]]*(?:imgur\.com|i\.imgur\.com)\/[^\s<>"')\]]+/gi,
+        /https?:\/\/[^\s<>"')\]]*blob\.core\.windows\.net\/[^\s<>"')\]]+/gi,
+        /https?:\/\/[^\s<>"')\]]*googleusercontent\.com\/[^\s<>"')\]]+/gi,
+    ]) {
+        cleanText = cleanText.replace(pattern, '');
+    }
+    cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
 
     return { cleanText, imageUrls };
 }
@@ -2616,9 +2627,50 @@ ${current}
                             return chunks.length > 0;
                         };
                         // Helper: send a single image via CQ code
+                        // Downloads image server-side first to validate; if it fails, skip silently (never expose raw URL)
                         const sendImage = async (imgUrl: string) => {
                             if (currentRunState?.isStale()) return;
-                            const imgMsg = `[CQ:image,file=${imgUrl}]`;
+                            let fileRef = imgUrl;
+                            // For remote URLs, download and validate before sending
+                            if (imgUrl.startsWith("http://") || imgUrl.startsWith("https://")) {
+                                try {
+                                    const imgResp = await fetch(imgUrl, {
+                                        signal: AbortSignal.timeout(15000),
+                                        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+                                    });
+                                    if (!imgResp.ok) {
+                                        console.warn(`[QQ] Image download failed (HTTP ${imgResp.status}), skipping: ${imgUrl.substring(0, 120)}`);
+                                        return;
+                                    }
+                                    const buf = Buffer.from(await imgResp.arrayBuffer());
+                                    if (buf.length < 100) {
+                                        console.warn(`[QQ] Image too small (${buf.length}B), skipping: ${imgUrl.substring(0, 120)}`);
+                                        return;
+                                    }
+                                    // Validate: check magic bytes for common image formats
+                                    const isValidImage =
+                                        (buf[0] === 0xFF && buf[1] === 0xD8) || // JPEG
+                                        (buf[0] === 0x89 && buf[1] === 0x50) || // PNG
+                                        (buf[0] === 0x47 && buf[1] === 0x49) || // GIF
+                                        (buf[0] === 0x52 && buf[1] === 0x49) || // WEBP (RIFF)
+                                        (buf[0] === 0x42 && buf[1] === 0x4D);   // BMP
+                                    if (!isValidImage) {
+                                        console.warn(`[QQ] Downloaded data is not a valid image (magic: ${buf[0]?.toString(16)}${buf[1]?.toString(16)}), skipping: ${imgUrl.substring(0, 120)}`);
+                                        return;
+                                    }
+                                    // Save to temp file
+                                    const contentType = imgResp.headers.get("content-type") || "image/jpeg";
+                                    const mimeType = contentType.split(";")[0].trim();
+                                    const saved = await getQQRuntime().channel.media.saveMediaBuffer(buf, mimeType, "outbound");
+                                    fileRef = `file://${saved.path}`;
+                                    console.log(`[QQ] Image validated & saved for sending: ${saved.path} (${buf.length}B) from ${imgUrl.substring(0, 80)}`);
+                                } catch (dlErr) {
+                                    console.warn(`[QQ] Image download/validate error, skipping: ${String(dlErr).substring(0, 150)} url=${imgUrl.substring(0, 120)}`);
+                                    return;
+                                }
+                            }
+                            if (currentRunState?.isStale()) return;
+                            const imgMsg = `[CQ:image,file=${fileRef}]`;
                             if (isGroup) client.sendGroupMsg(groupId, imgMsg);
                             else if (isGuild) client.sendGuildChannelMsg(guildId, channelId, imgMsg);
                             else client.sendPrivateMsg(userId, imgMsg);

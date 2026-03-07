@@ -1,0 +1,8 @@
+{
+  "id": "url-reader",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

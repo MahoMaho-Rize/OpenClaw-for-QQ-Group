@@ -135,7 +135,17 @@
       "fandom": { "enabled": true },
       "bing": { "enabled": true },
       "yandex": { "enabled": true },
-      "bilibili": { "enabled": true }
+      "bilibili": { "enabled": true },
+      "usage": { "enabled": true },
+      "chat-summary": {
+        "enabled": true,
+        "config": {
+          "napcat_http_url": "http://127.0.0.1:3002",
+          "napcat_token": "YOUR_ONEBOT_ACCESS_TOKEN"
+        }
+      },
+      "url-reader": { "enabled": true },
+      "image-search": { "enabled": true }
     }
   }
 }

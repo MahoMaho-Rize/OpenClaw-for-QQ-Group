@@ -1,0 +1,17 @@
+{
+  "id": "chat-summary",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "napcat_http_url": {
+        "type": "string",
+        "description": "NapCat OneBot11 HTTP API URL"
+      },
+      "napcat_token": {
+        "type": "string",
+        "description": "NapCat HTTP API token"
+      }
+    }
+  }
+}

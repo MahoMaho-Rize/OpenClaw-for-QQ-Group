@@ -2860,6 +2860,7 @@ ${current}
                                         deny: [
                                             ...((cfg as any).tools?.deny || []),
                                             "exec", "write", "edit", "apply_patch",
+                                            ...(!isAdmin ? ["usage"] : []),
                                         ].filter((v: string, i: number, a: string[]) => a.indexOf(v) === i),
                                         exec: {
                                             ...((cfg as any).tools?.exec || {}),

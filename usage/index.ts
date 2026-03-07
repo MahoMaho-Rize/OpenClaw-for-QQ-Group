@@ -11,14 +11,26 @@ function getSessionsJsonPath(): string {
 }
 
 function getChannelFromKey(key: string): string {
-  // "agent:main:qq:group:738129404" -> "qq"
-  // "agent:main:feishu:direct:ou_..." -> "feishu"
   const parts = key.split(":");
   if (parts.length >= 3) {
     const ch = parts[2];
     if (["qq", "feishu", "telegram", "discord", "slack", "web"].includes(ch)) return ch;
   }
   return "internal";
+}
+
+/** Extract group/chat ID from session key, e.g. "agent:main:qq:group:738129404" -> "738129404" */
+function getGroupIdFromKey(key: string): string | null {
+  const parts = key.split(":");
+  // agent:main:qq:group:738129404
+  if (parts.length >= 5 && parts[3] === "group") return parts[4];
+  return null;
+}
+
+function getChatTypeFromKey(key: string): string {
+  const parts = key.split(":");
+  if (parts.length >= 4) return parts[3]; // "group" or "direct"
+  return "unknown";
 }
 
 function formatTokens(n: number): string {
@@ -43,17 +55,28 @@ interface SessionEntry {
   totalTokens?: number;
   updatedAt?: number;
   createdAt?: number;
-  origin?: { provider?: string };
 }
 
-interface UsageSummary {
-  channel: string;
+interface UsageNumbers {
   sessions: number;
   inputTokens: number;
   outputTokens: number;
   cacheRead: number;
   cacheWrite: number;
   totalTokens: number;
+}
+
+function emptyUsage(): UsageNumbers {
+  return { sessions: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+}
+
+function addUsage(target: UsageNumbers, entry: SessionEntry) {
+  target.sessions += 1;
+  target.inputTokens += entry.inputTokens || 0;
+  target.outputTokens += entry.outputTokens || 0;
+  target.cacheRead += entry.cacheRead || 0;
+  target.cacheWrite += entry.cacheWrite || 0;
+  target.totalTokens += entry.totalTokens || 0;
 }
 
 async function loadSessions(): Promise<Record<string, SessionEntry>> {
@@ -66,76 +89,16 @@ async function loadSessions(): Promise<Record<string, SessionEntry>> {
   }
 }
 
-function aggregateUsage(
-  sessions: Record<string, SessionEntry>,
-  filterChannel?: string,
-  days?: number,
-): { byChannel: Record<string, UsageSummary>; total: UsageSummary } {
-  const cutoff = days && days > 0 ? daysAgoMs(days) : 0;
-
-  const byChannel: Record<string, UsageSummary> = {};
-  const total: UsageSummary = {
-    channel: "all",
-    sessions: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-  };
-
-  for (const [key, entry] of Object.entries(sessions)) {
-    const channel = getChannelFromKey(key);
-
-    // Filter by channel if specified
-    if (filterChannel && filterChannel !== "all" && channel !== filterChannel) continue;
-
-    // Filter by time if specified
-    const ts = entry.updatedAt || entry.createdAt || 0;
-    if (cutoff > 0 && ts < cutoff) continue;
-
-    if (!byChannel[channel]) {
-      byChannel[channel] = {
-        channel,
-        sessions: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-      };
-    }
-
-    const ch = byChannel[channel];
-    ch.sessions += 1;
-    ch.inputTokens += entry.inputTokens || 0;
-    ch.outputTokens += entry.outputTokens || 0;
-    ch.cacheRead += entry.cacheRead || 0;
-    ch.cacheWrite += entry.cacheWrite || 0;
-    ch.totalTokens += entry.totalTokens || 0;
-
-    total.sessions += 1;
-    total.inputTokens += entry.inputTokens || 0;
-    total.outputTokens += entry.outputTokens || 0;
-    total.cacheRead += entry.cacheRead || 0;
-    total.cacheWrite += entry.cacheWrite || 0;
-    total.totalTokens += entry.totalTokens || 0;
-  }
-
-  return { byChannel, total };
-}
-
-function formatSummary(s: UsageSummary, label: string): string {
-  const lines: string[] = [
-    `### ${label}`,
-    `会话数: ${s.sessions}`,
-    `总 Token: ${formatTokens(s.totalTokens)}`,
-    `  输入: ${formatTokens(s.inputTokens)}`,
-    `  输出: ${formatTokens(s.outputTokens)}`,
-    `  缓存读取: ${formatTokens(s.cacheRead)}`,
-    `  缓存写入: ${formatTokens(s.cacheWrite)}`,
-  ];
-  return lines.join("\n");
+function formatUsageBlock(u: UsageNumbers, label: string): string {
+  return [
+    `【${label}】`,
+    `会话数: ${u.sessions}`,
+    `总 Token: ${formatTokens(u.totalTokens)}`,
+    `  输入: ${formatTokens(u.inputTokens)}`,
+    `  输出: ${formatTokens(u.outputTokens)}`,
+    `  缓存读取: ${formatTokens(u.cacheRead)}`,
+    `  缓存写入: ${formatTokens(u.cacheWrite)}`,
+  ].join("\n");
 }
 
 function text(str: string) {
@@ -145,19 +108,17 @@ function text(str: string) {
 // --- Plugin ---
 
 const UsageSchema = Type.Object({
-  action: Type.Union([
-    Type.Literal("summary"),
-    Type.Literal("detail"),
-  ]),
-  channel: Type.Optional(
+  channel: Type.String({
+    description: "渠道名称。你必须根据当前对话来源填写: 在QQ群/私聊中填 qq，在飞书中填 feishu，填 all 查看所有渠道。",
+  }),
+  group_id: Type.Optional(
     Type.String({
-      description:
-        "按渠道过滤: qq, feishu, all。如果当前对话来自QQ就填qq，来自飞书就填feishu，不填则只显示当前渠道的数据。",
+      description: "群号。如果用户在某个QQ群中提问，填入该群的群号（从对话上下文的元数据中获取）。不填则显示该渠道下所有会话的合计。",
     }),
   ),
   days: Type.Optional(
     Type.Number({
-      description: "统计最近N天的数据，默认30天，0表示全部",
+      description: "统计最近N天的数据，默认30天，0表示全部历史",
     }),
   ),
 });
@@ -172,107 +133,86 @@ const plugin = {
       {
         name: "usage",
         label: "用量统计",
-        description: `查询 OpenClaw 的 token 用量统计数据，支持按渠道（QQ/飞书等）和时间范围过滤。
-重要：请根据当前对话所在的渠道自动填入 channel 参数。如果用户在QQ中询问，channel应填"qq"；在飞书中询问则填"feishu"。
-Actions:
-- summary: 查看用量汇总（按渠道分组）
-- detail: 查看指定渠道的详细用量`,
+        description: `查询本bot的 token 用量统计，按渠道和群分别统计。
+调用时你必须根据当前对话来源自动填入 channel 参数（qq/feishu）。
+如果用户在QQ群中提问，还应填入 group_id（从消息元数据中的群号获取）。
+这样用户只会看到自己所在群的用量，而非所有渠道的混合数据。`,
         parameters: UsageSchema,
 
         async execute(_toolCallId: string, params: any) {
           try {
             const sessions = await loadSessions();
             const days = params.days ?? 30;
-            const channel = params.channel || undefined;
+            const channel: string = params.channel || "all";
+            const groupId: string | undefined = params.group_id || undefined;
+            const cutoff = days > 0 ? daysAgoMs(days) : 0;
             const daysLabel = days > 0 ? `最近${days}天` : "全部时间";
 
-            switch (params.action) {
-              case "summary": {
-                const { byChannel, total } = aggregateUsage(sessions, channel, days);
+            // Filter and aggregate
+            const matchedSessions: Array<{ key: string; entry: SessionEntry }> = [];
+            const usage = emptyUsage();
 
-                const lines: string[] = [`## OpenClaw 用量统计 (${daysLabel})`];
-
-                if (channel && channel !== "all") {
-                  // 只显示指定渠道
-                  const ch = byChannel[channel];
-                  if (!ch || ch.sessions === 0) {
-                    return text(`${daysLabel}内 ${channel} 渠道没有使用记录。`);
-                  }
-                  lines.push("", formatSummary(ch, `${channel} 渠道`));
-                } else {
-                  // 显示所有渠道
-                  const channels = Object.values(byChannel).sort(
-                    (a, b) => b.totalTokens - a.totalTokens,
-                  );
-                  for (const ch of channels) {
-                    lines.push("", formatSummary(ch, `${ch.channel} 渠道`));
-                  }
-                  if (channels.length > 1) {
-                    lines.push("", formatSummary(total, "合计"));
-                  }
-                }
-
-                return text(lines.join("\n"));
+            for (const [key, entry] of Object.entries(sessions)) {
+              const ch = getChannelFromKey(key);
+              // Channel filter
+              if (channel !== "all" && ch !== channel) continue;
+              // Group filter
+              if (groupId) {
+                const gid = getGroupIdFromKey(key);
+                if (gid !== groupId) continue;
               }
+              // Time filter
+              const ts = entry.updatedAt || entry.createdAt || 0;
+              if (cutoff > 0 && ts < cutoff) continue;
 
-              case "detail": {
-                const ch = channel || "all";
-                const { byChannel, total } = aggregateUsage(sessions, ch, days);
-
-                const lines: string[] = [`## OpenClaw 详细用量 (${daysLabel})`];
-
-                // List individual sessions for the channel
-                const sessionList: Array<{
-                  key: string;
-                  channel: string;
-                  chatType: string;
-                  totalTokens: number;
-                  updatedAt: number;
-                }> = [];
-
-                const cutoff = days > 0 ? daysAgoMs(days) : 0;
-
-                for (const [key, entry] of Object.entries(sessions)) {
-                  const sCh = getChannelFromKey(key);
-                  if (ch !== "all" && sCh !== ch) continue;
-                  const ts = entry.updatedAt || entry.createdAt || 0;
-                  if (cutoff > 0 && ts < cutoff) continue;
-                  sessionList.push({
-                    key,
-                    channel: sCh,
-                    chatType: entry.chatType || "unknown",
-                    totalTokens: entry.totalTokens || 0,
-                    updatedAt: ts,
-                  });
-                }
-
-                sessionList.sort((a, b) => b.totalTokens - a.totalTokens);
-
-                // Summary first
-                const summary = ch === "all" ? total : byChannel[ch];
-                if (summary) {
-                  lines.push("", formatSummary(summary, ch === "all" ? "合计" : `${ch} 渠道`));
-                }
-
-                // Top sessions
-                lines.push("", `### 会话明细 (Top ${Math.min(sessionList.length, 20)})`);
-                const top = sessionList.slice(0, 20);
-                for (const s of top) {
-                  const date = s.updatedAt
-                    ? new Date(s.updatedAt).toLocaleDateString("zh-CN")
-                    : "未知";
-                  const keyShort = s.key.length > 50 ? s.key.slice(0, 50) + "..." : s.key;
-                  lines.push(
-                    `- ${formatTokens(s.totalTokens)} | ${s.channel}/${s.chatType} | ${date} | ${keyShort}`,
-                  );
-                }
-
-                return text(lines.join("\n"));
-              }
-
-              default:
-                return text(`未知操作: ${params.action}。可用: summary, detail`);
+              matchedSessions.push({ key, entry });
+              addUsage(usage, entry);
             }
+
+            if (matchedSessions.length === 0) {
+              const scope = groupId ? `群${groupId}` : `${channel}渠道`;
+              return text(`${daysLabel}内 ${scope} 没有使用记录。`);
+            }
+
+            // Build response
+            const lines: string[] = [];
+            const scope = groupId ? `群 ${groupId}` : channel === "all" ? "所有渠道" : `${channel} 渠道`;
+            lines.push(`📊 用量统计 — ${scope}（${daysLabel}）`);
+            lines.push("");
+            lines.push(formatUsageBlock(usage, scope));
+
+            // If showing all channels (no group filter), break down by channel
+            if (channel === "all" && !groupId) {
+              const byChannel: Record<string, UsageNumbers> = {};
+              for (const { key, entry } of matchedSessions) {
+                const ch = getChannelFromKey(key);
+                if (!byChannel[ch]) byChannel[ch] = emptyUsage();
+                addUsage(byChannel[ch], entry);
+              }
+              const sorted = Object.entries(byChannel).sort((a, b) => b[1].totalTokens - a[1].totalTokens);
+              for (const [ch, u] of sorted) {
+                lines.push("");
+                lines.push(formatUsageBlock(u, ch));
+              }
+            }
+
+            // If showing a channel without group filter, break down by group/chat
+            if (channel !== "all" && !groupId && matchedSessions.length > 1) {
+              lines.push("");
+              lines.push("--- 按会话明细 ---");
+              const sorted = matchedSessions.sort(
+                (a, b) => (b.entry.totalTokens || 0) - (a.entry.totalTokens || 0),
+              );
+              for (const { key, entry } of sorted.slice(0, 15)) {
+                const chatType = getChatTypeFromKey(key);
+                const gid = getGroupIdFromKey(key);
+                const label = chatType === "group" && gid ? `群${gid}` : chatType === "direct" ? "私聊" : key;
+                const date = entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString("zh-CN") : "";
+                lines.push(`  ${label}: ${formatTokens(entry.totalTokens || 0)} (${date})`);
+              }
+            }
+
+            return text(lines.join("\n"));
           } catch (err) {
             return text(`读取用量数据失败: ${err instanceof Error ? err.message : String(err)}`);
           }

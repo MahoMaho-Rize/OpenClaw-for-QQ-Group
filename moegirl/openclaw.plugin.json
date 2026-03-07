@@ -1,0 +1,8 @@
+{
+  "id": "moegirl",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.2"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "custom": {
+        "baseUrl": "YOUR_LLM_API_BASE_URL",
+        "apiKey": "YOUR_LLM_API_KEY",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6 (Custom)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 16384
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "custom/claude-sonnet-4-6"
+      },
+      "models": {
+        "custom/claude-sonnet-4-6": {}
+      },
+      "workspace": "/path/to/.openclaw/workspace",
+      "contextTokens": 1000000,
+      "compaction": { "mode": "safeguard" },
+      "maxConcurrent": 4,
+      "subagents": { "maxConcurrent": 8 }
+    }
+  },
+  "tools": {
+    "profile": "full",
+    "deny": ["write", "edit", "apply_patch", "web_search"],
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "ask": "off"
+    },
+    "web": {
+      "search": {
+        "provider": "kimi",
+        "kimi": {
+          "apiKey": "YOUR_KIMI_API_KEY",
+          "baseUrl": "https://api.moonshot.cn/v1"
+        }
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "channels": {
+    "qq": {
+      "enabled": true,
+      "wsUrl": "ws://127.0.0.1:3001",
+      "accessToken": "YOUR_ONEBOT_ACCESS_TOKEN",
+      "requireMention": true,
+      "admins": "YOUR_ADMIN_QQ_ID",
+      "allowedGroups": "YOUR_GROUP_ID",
+      "adminOnlyChat": false,
+      "formatMarkdown": true,
+      "maxRetries": 3,
+      "interruptOnNewMessage": false,
+      "enableQueueNotify": false,
+      "queueDebounceMs": 500,
+      "sessionCooldownMs": 250,
+      "enableSoVITS": true,
+      "sovitsApiUrl": "http://127.0.0.1:9880",
+      "sovitsRefAudioPath": "/path/to/reference_audio.wav",
+      "sovitsPromptText": "参考音频对应的文本",
+      "sovitsPromptLang": "ja",
+      "sovitsMaxChars": 500
+    },
+    "feishu": {
+      "enabled": true,
+      "streaming": true,
+      "blockStreaming": true,
+      "defaultAccount": "main",
+      "accounts": {
+        "main": {
+          "appId": "YOUR_FEISHU_APP_ID",
+          "appSecret": "YOUR_FEISHU_APP_SECRET",
+          "botName": "OpenClaw AI"
+        },
+        "default": {
+          "dmPolicy": "pairing"
+        }
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "YOUR_GATEWAY_AUTH_TOKEN"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "plugins": {
+    "entries": {
+      "feishu": { "enabled": true },
+      "qq": { "enabled": true },
+      "bangumi": {
+        "enabled": true,
+        "config": {
+          "token": "YOUR_BANGUMI_API_TOKEN"
+        }
+      },
+      "thbwiki": { "enabled": true },
+      "moegirl": { "enabled": true },
+      "fandom": { "enabled": true },
+      "bing": { "enabled": true },
+      "yandex": { "enabled": true },
+      "bilibili": { "enabled": true }
+    }
+  }
+}

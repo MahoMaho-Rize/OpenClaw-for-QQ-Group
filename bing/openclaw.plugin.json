@@ -1,0 +1,8 @@
+{
+  "id": "bing",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

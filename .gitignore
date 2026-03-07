@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# OpenClaw official plugins (installed via npm, not our code)
+feishu/
+
+# Runtime / temp files
+*.log
+*.tmp
+.DS_Store
+
+# Media files
+*.wav
+*.mp3
+*.png
+*.jpg
+*.webp
+
+# Environment / secrets
+.env
+.env.local

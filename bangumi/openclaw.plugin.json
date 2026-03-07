@@ -1,0 +1,13 @@
+{
+  "id": "bangumi",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "token": {
+        "type": "string",
+        "description": "Bangumi API personal access token (from https://bgm.tv/dev/app)"
+      }
+    }
+  }
+}

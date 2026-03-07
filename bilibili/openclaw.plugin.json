@@ -1,0 +1,8 @@
+{
+  "id": "bilibili",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

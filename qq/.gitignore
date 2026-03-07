@@ -1,0 +1,46 @@
+# Compiled output
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+
+# Keep .js files in scripts/ if any
+!scripts/**/*.js
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build output
+dist/
+build/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+deploy/napcat/napcat/
+deploy/napcat/shared_media/*
+!deploy/napcat/shared_media/.gitkeep
+
+# local secrets
+deploy/napcat/.env
+
+# Local deployment-only artifacts
+deploy/migration/
+deploy/napcat/shared_media

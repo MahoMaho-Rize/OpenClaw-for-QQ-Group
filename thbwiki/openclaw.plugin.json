@@ -1,0 +1,8 @@
+{
+  "id": "thbwiki",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

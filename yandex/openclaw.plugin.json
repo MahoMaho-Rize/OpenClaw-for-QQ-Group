@@ -1,0 +1,8 @@
+{
+  "id": "yandex",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

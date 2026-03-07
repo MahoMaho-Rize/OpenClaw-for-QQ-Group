@@ -12,6 +12,7 @@ import * as zlib from "node:zlib";
 
 const BING_BASE = "https://cn.bing.com";
 const YANDEX_BASE = "https://yandex.ru";
+const SAFEBOORU_BASE = "https://safebooru.org";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const REQUEST_TIMEOUT = 15_000;
@@ -344,33 +345,157 @@ async function searchYandex(query: string, count: number, size?: string): Promis
 }
 
 /* ==================================================================== */
+/*  Safebooru Image Search (booru tag-based, best for ACG characters)   */
+/* ==================================================================== */
+
+interface SafebooruPost {
+  id: number;
+  file_url: string;
+  sample_url: string;
+  preview_url: string;
+  tags: string;
+  width: number;
+  height: number;
+  source: string;
+  rating: string;
+}
+
+interface SafebooruTag {
+  label: string;
+  value: string;
+}
+
+/** Use Safebooru autocomplete to find matching tags for a query string */
+async function safebooruAutocompleteTags(query: string): Promise<SafebooruTag[]> {
+  const url = `${SAFEBOORU_BASE}/autocomplete.php?q=${encodeURIComponent(query)}`;
+  const res = await httpGet(url, { timeout: 10_000 });
+  if (res.status !== 200) return [];
+  try {
+    const arr = JSON.parse(res.data);
+    if (!Array.isArray(arr)) return [];
+    return arr.map((item: any) => ({
+      label: decodeHtmlEntities(String(item.label || "")),
+      value: String(item.value || ""),
+    })).filter((t: SafebooruTag) => t.value);
+  } catch {
+    return [];
+  }
+}
+
+/** Search Safebooru posts by tags (space-separated booru tags) */
+async function safebooruSearchPosts(tags: string, count: number, pid: number = 0): Promise<SafebooruPost[]> {
+  const url = `${SAFEBOORU_BASE}/index.php?page=dapi&s=post&q=index&tags=${encodeURIComponent(tags)}&limit=${count}&pid=${pid}&json=1`;
+  const res = await httpGet(url, { timeout: 15_000 });
+  if (res.status !== 200) return [];
+  try {
+    const arr = JSON.parse(res.data);
+    if (!Array.isArray(arr)) return [];
+    return arr as SafebooruPost[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * High-level Safebooru search:
+ * 1. Autocomplete each query token to find valid booru tags
+ * 2. Search posts using the resolved tags
+ * Returns ImageResult[] for consistency with other engines.
+ */
+async function searchSafebooru(query: string, count: number): Promise<ImageResult[]> {
+  // Split query into tokens; try to resolve each to a valid tag
+  const tokens = query.split(/[\s,+]+/).filter(Boolean);
+
+  // Strategy: try the full query as a single autocomplete first
+  // (works well for romaji names like "hakurei_reimu")
+  let resolvedTags: string[] = [];
+
+  // First, try the full query (in case it's already a booru tag like "hakurei_reimu")
+  const fullAc = await safebooruAutocompleteTags(query.replace(/\s+/g, "_"));
+  if (fullAc.length > 0) {
+    // Pick the best match (highest count, first result)
+    resolvedTags.push(fullAc[0].value);
+  }
+
+  // If full query didn't match, try each token individually
+  if (resolvedTags.length === 0) {
+    for (const token of tokens) {
+      if (token.length < 2) continue;
+      const ac = await safebooruAutocompleteTags(token);
+      if (ac.length > 0) {
+        // Only add the first (best) match per token
+        const bestTag = ac[0].value;
+        if (!resolvedTags.includes(bestTag)) {
+          resolvedTags.push(bestTag);
+        }
+      }
+    }
+  }
+
+  if (resolvedTags.length === 0) {
+    console.log(`[image-search] Safebooru: no valid tags found for "${query}"`);
+    return [];
+  }
+
+  // Limit to 3 tags to keep results relevant
+  const searchTags = resolvedTags.slice(0, 3).join(" ");
+  console.log(`[image-search] Safebooru: resolved tags "${searchTags}" from query "${query}"`);
+
+  // Fetch random page for variety (Safebooru has no random sort, but we can random pid)
+  const randomPid = Math.floor(Math.random() * 5); // first 5 pages
+  const posts = await safebooruSearchPosts(searchTags, count * 2, randomPid);
+
+  // Shuffle for variety
+  for (let i = posts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [posts[i], posts[j]] = [posts[j], posts[i]];
+  }
+
+  return posts
+    .filter((p) => p.file_url || p.sample_url)
+    .slice(0, count)
+    .map((p) => ({
+      title: (p.tags || "").split(" ").slice(0, 5).join(", "),
+      image_url: p.file_url || p.sample_url,
+      thumbnail_url: p.preview_url || p.sample_url || "",
+      width: p.width || undefined,
+      height: p.height || undefined,
+      source: p.source ? `safebooru #${p.id}` : `safebooru #${p.id}`,
+    }));
+}
+
+/* ==================================================================== */
 /*  Plugin entry                                                        */
 /* ==================================================================== */
 
 const plugin = {
   id: "image-search",
   name: "Image Search",
-  description: "通过Bing/Yandex图片搜索找图，返回图片URL可直接发送到QQ",
+  description: "通过Safebooru/Bing/Yandex图片搜索找图，返回图片URL可直接发送到QQ",
 
   register(api: OpenClawPluginApi) {
     api.registerTool({
       name: "image_search",
       label: "图片搜索",
-      description: `通过 Bing 或 Yandex 图片搜索找图片。返回图片的直链URL。
-支持两个搜索引擎，各有优势：
-- **bing**: 适合通用搜索、中文关键词，国内可直连
+      description: `通过 Safebooru / Bing / Yandex 图片搜索找图片。返回图片的直链URL。
+支持三个搜索引擎，各有优势：
+- **safebooru**: 二次元角色图片专用。Booru 风格图库，用英文/罗马字 tag 搜索（如 hakurei_reimu, akiyama_mizuki）。图片质量高、标签精确、全年龄。**ACG 角色首选**。
+- **bing**: 适合通用搜索、真人、中文关键词，国内可直连
 - **yandex**: 适合动漫/二次元角色、插画，俄系搜索引擎对 ACG 内容覆盖好
-- **both**: 同时搜两个引擎，去重后合并结果（推荐用于找不到图的情况）
+- **both**: 同时搜 Bing + Yandex 两个引擎，去重后合并结果
 
 **重要**：搜索到图片后，你应该直接把图片URL用 Markdown 图片格式 ![描述](URL) 发给用户，系统会自动将其转换为QQ图片消息发送。每张图片单独一行。绝对不要把图片URL以纯文本形式暴露给用户。
 
 **ACG角色/人物找图工作流**（必须遵循）：
-当用户要求搜索特定动漫/游戏/东方Project等ACG角色的图片时，你必须先使用以下工具确认角色信息，再来搜图：
+当用户要求搜索特定动漫/游戏/东方Project/BanG Dream/Love Live/Project SEKAI 等ACG角色的图片时：
 1. 先用 moegirl（萌娘百科）或 thbwiki（东方Wiki）或 bangumi 或 fandom 搜索该角色
-2. 从搜索结果中确认角色的：正式名称（中/日/英）、所属作品、外貌特征等
-3. 用确认后的准确名称（建议用日文或英文原名）作为 query 调用本工具搜图
-4. 二次元角色搜图建议使用 source=yandex 或 source=both
-例如：用户说"找一张灵梦的图" → 先用 thbwiki 搜索"博丽灵梦" → 确认是东方Project角色 → 用 "博麗霊夢 touhou" 作为 query, source=yandex 搜图
+2. 从搜索结果中确认角色的：正式名称（中/日/英）、所属作品
+3. **优先使用 source=safebooru**，query 用角色的英文/罗马字名（姓_名 格式，如 able_sayo、toyokawa_fuuka、akiyama_mizuki、hakurei_reimu）。Safebooru 自动补全会匹配最接近的 tag。
+4. 如果 Safebooru 返回结果为空或不满意，再用 source=yandex 或 source=both 补充搜索
+例如：用户说"找一张灵梦的图" → 先用 thbwiki 搜索"博丽灵梦" → 确认是东方Project角色 → 用 "hakurei_reimu" 作为 query, source=safebooru 搜图
+例如：用户说"找晓山瑞希的图" → 先用 moegirl 确认是 Project SEKAI 角色 → 英文名 Akiyama Mizuki → 用 "akiyama_mizuki" 作为 query, source=safebooru 搜图
+
+**非 ACG 角色**（真人、风景、物品等）不要用 safebooru，用 bing 即可。
 
 使用场景：
 - 用户说"找一张xxx的图"、"搜一下xxx图片"
@@ -383,13 +508,14 @@ const plugin = {
         source: Type.Optional(
           Type.Union(
             [
+              Type.Literal("safebooru"),
               Type.Literal("bing"),
               Type.Literal("yandex"),
               Type.Literal("both"),
             ],
             {
               description:
-                "搜索引擎：bing（默认）、yandex、both（同时搜索两个引擎）。二次元/ACG 内容推荐 yandex 或 both。",
+                "搜索引擎：safebooru（ACG角色首选，用英文/罗马字tag）、bing（通用/真人/中文）、yandex（二次元补充）、both（Bing+Yandex合并）。",
             }
           )
         ),
@@ -434,6 +560,19 @@ const plugin = {
             }
           }
           return out;
+        }
+
+        // Search Safebooru
+        if (source === "safebooru") {
+          try {
+            const sbResults = await searchSafebooru(trimmedQuery, count);
+            allResults.push(...dedup(sbResults));
+            console.log(`[image-search] Safebooru "${trimmedQuery}" → ${sbResults.length} results`);
+          } catch (err) {
+            const msg = `Safebooru 搜索失败: ${String(err)}`;
+            errors.push(msg);
+            console.warn(`[image-search] ${msg}`);
+          }
         }
 
         // Search Bing
@@ -494,7 +633,7 @@ const plugin = {
       },
     });
 
-    console.log("[image-search] Registered image_search tool (Bing + Yandex Images, IPv4)");
+    console.log("[image-search] Registered image_search tool (Safebooru + Bing + Yandex Images, IPv4)");
   },
 };
 

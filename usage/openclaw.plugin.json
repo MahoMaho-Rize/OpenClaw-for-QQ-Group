@@ -1,0 +1,8 @@
+{
+  "id": "usage",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

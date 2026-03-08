@@ -19,3 +19,22 @@ feishu/
 # Environment / secrets
 .env
 .env.local
+
+# OpenClaw config (contains API keys, tokens, server addresses)
+openclaw.json
+!openclaw.json.example
+
+# Deployment scripts with server info
+# sync-to-hk.sh is tracked but contains no secrets (IP only, no keys)
+
+# Runtime data
+*.sqlite
+sessions.json
+exec-approvals.json
+update-check.json
+delivery-queue/
+credentials/
+identity/
+devices/
+subagents/
+logs/

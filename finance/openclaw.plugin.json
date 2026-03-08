@@ -1,0 +1,8 @@
+{
+  "id": "finance",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

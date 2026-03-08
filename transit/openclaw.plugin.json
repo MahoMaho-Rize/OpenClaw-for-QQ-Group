@@ -1,0 +1,8 @@
+{
+  "id": "transit",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

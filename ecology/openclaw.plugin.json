@@ -1,0 +1,8 @@
+{
+  "id": "ecology",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "nba-mlb",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

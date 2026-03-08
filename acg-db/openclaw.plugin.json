@@ -1,0 +1,8 @@
+{
+  "id": "acg-db",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

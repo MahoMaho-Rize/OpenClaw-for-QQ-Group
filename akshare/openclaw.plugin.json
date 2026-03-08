@@ -1,0 +1,8 @@
+{
+  "id": "akshare",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

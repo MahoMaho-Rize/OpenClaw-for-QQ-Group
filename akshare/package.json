@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-plugin-akshare",
+  "version": "0.1.0",
+  "description": "AkShare-compatible Chinese financial data tools for OpenClaw",
+  "private": true,
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "esports",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

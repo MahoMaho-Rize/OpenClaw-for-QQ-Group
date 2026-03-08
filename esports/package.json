@@ -1,0 +1,10 @@
+{
+  "name": "openclaw-plugin-esports",
+  "version": "0.1.0",
+  "description": "Esports data tools for OpenClaw — Liquipedia (Dota2/CS2/LoL/Val/SC2) + HLTV (CS2 rankings)",
+  "private": true,
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "hltv": "^3.5.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "steam",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

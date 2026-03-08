@@ -1,21 +1,36 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.3.2"
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "2026-03-06T15:47:54.648Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-03-05T11:59:00.988Z",
+    "lastRunVersion": "2026.3.2",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
   },
   "models": {
     "mode": "merge",
     "providers": {
       "custom": {
-        "baseUrl": "YOUR_LLM_API_BASE_URL",
-        "apiKey": "YOUR_LLM_API_KEY",
+        "baseUrl": "http://REDACTED_LAN_IP:8088/api",
+        "apiKey": "YOUR_CRYPTORANK_API_KEY",
         "api": "anthropic-messages",
         "models": [
           {
             "id": "claude-sonnet-4-6",
             "name": "Claude Sonnet 4.6 (Custom)",
             "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
             "contextWindow": 1000000,
             "maxTokens": 16384
           }
@@ -31,16 +46,25 @@
       "models": {
         "custom/claude-sonnet-4-6": {}
       },
-      "workspace": "/path/to/.openclaw/workspace",
+      "workspace": "/home/YOUR_USER/.openclaw/workspace",
       "contextTokens": 1000000,
-      "compaction": { "mode": "safeguard" },
+      "compaction": {
+        "mode": "safeguard"
+      },
       "maxConcurrent": 4,
-      "subagents": { "maxConcurrent": 8 }
+      "subagents": {
+        "maxConcurrent": 8
+      }
     }
   },
   "tools": {
     "profile": "full",
-    "deny": ["write", "edit", "apply_patch", "web_search"],
+    "deny": [
+      "write",
+      "edit",
+      "apply_patch",
+      "web_search"
+    ],
     "exec": {
       "host": "gateway",
       "security": "full",
@@ -50,7 +74,7 @@
       "search": {
         "provider": "kimi",
         "kimi": {
-          "apiKey": "YOUR_KIMI_API_KEY",
+          "apiKey": "YOUR_OPENAI_COMPATIBLE_API_KEY",
           "baseUrl": "https://api.moonshot.cn/v1"
         }
       }
@@ -72,10 +96,10 @@
     "qq": {
       "enabled": true,
       "wsUrl": "ws://127.0.0.1:3001",
-      "accessToken": "YOUR_ONEBOT_ACCESS_TOKEN",
+      "accessToken": "YOUR_ACCESS_TOKEN",
       "requireMention": true,
-      "admins": "YOUR_ADMIN_QQ_ID",
-      "allowedGroups": "YOUR_GROUP_ID",
+      "admins": "REDACTED_ADMIN_QQ",
+      "allowedGroups": "YOUR_QQ_GROUP_IDS",
       "adminOnlyChat": false,
       "formatMarkdown": true,
       "maxRetries": 3,
@@ -85,8 +109,8 @@
       "sessionCooldownMs": 250,
       "enableSoVITS": true,
       "sovitsApiUrl": "http://127.0.0.1:9880",
-      "sovitsRefAudioPath": "/path/to/reference_audio.wav",
-      "sovitsPromptText": "参考音频对应的文本",
+      "sovitsRefAudioPath": "/home/YOUR_USER/gpt-sovits-models/Saki/ref_audio/sakikoV2 (5).wav",
+      "sovitsPromptText": "デンショバトになってはいけませんわ。ごきげんよう。",
       "sovitsPromptLang": "ja",
       "sovitsMaxChars": 500
     },
@@ -113,7 +137,7 @@
     "bind": "loopback",
     "auth": {
       "mode": "token",
-      "token": "YOUR_GATEWAY_AUTH_TOKEN"
+      "token": "YOUR_FEISHU_TOKEN"
     },
     "tailscale": {
       "mode": "off",
@@ -122,30 +146,118 @@
   },
   "plugins": {
     "entries": {
-      "feishu": { "enabled": true },
-      "qq": { "enabled": true },
+      "feishu": {
+        "enabled": true
+      },
+      "qq": {
+        "enabled": true
+      },
       "bangumi": {
         "enabled": true,
         "config": {
-          "token": "YOUR_BANGUMI_API_TOKEN"
+          "token": "YOUR_FEISHU_WEBHOOK_TOKEN"
         }
       },
-      "thbwiki": { "enabled": true },
-      "moegirl": { "enabled": true },
-      "fandom": { "enabled": true },
-      "bing": { "enabled": true },
-      "yandex": { "enabled": true },
-      "bilibili": { "enabled": true },
-      "usage": { "enabled": true },
+      "thbwiki": {
+        "enabled": true
+      },
+      "moegirl": {
+        "enabled": true
+      },
+      "fandom": {
+        "enabled": true
+      },
+      "bing": {
+        "enabled": true
+      },
+      "yandex": {
+        "enabled": true
+      },
+      "bilibili": {
+        "enabled": true
+      },
+      "usage": {
+        "enabled": true
+      },
       "chat-summary": {
         "enabled": true,
         "config": {
           "napcat_http_url": "http://127.0.0.1:3002",
-          "napcat_token": "YOUR_ONEBOT_ACCESS_TOKEN"
+          "napcat_token": "YOUR_ACCESS_TOKEN"
         }
       },
-      "url-reader": { "enabled": true },
-      "image-search": { "enabled": true }
+      "url-reader": {
+        "enabled": true
+      },
+      "image-search": {
+        "enabled": true
+      },
+      "weather": {
+        "enabled": true
+      },
+      "finance": {
+        "enabled": true
+      },
+      "steam": {
+        "enabled": true
+      },
+      "acg-db": {
+        "enabled": true
+      },
+      "trivia": {
+        "enabled": true
+      },
+      "douban": {
+        "enabled": true
+      },
+      "space": {
+        "enabled": true
+      },
+      "academia": {
+        "enabled": true
+      },
+      "arts": {
+        "enabled": true
+      },
+      "sports": {
+        "enabled": true
+      },
+      "lookup": {
+        "enabled": true
+      },
+      "ecology": {
+        "enabled": true
+      },
+      "akshare": {
+        "enabled": true
+      },
+      "esports": {
+        "enabled": true
+      },
+      "transit": {
+        "enabled": true
+      },
+      "football": {
+        "enabled": true
+      },
+      "nba-mlb": {
+        "enabled": true
+      }
+    },
+    "installs": {
+      "feishu": {
+        "source": "npm",
+        "spec": "@openclaw/feishu",
+        "installPath": "/home/YOUR_USER/.openclaw/extensions/feishu",
+        "version": "2026.3.2",
+        "resolvedName": "@openclaw/feishu",
+        "resolvedVersion": "2026.3.2",
+        "resolvedSpec": "@openclaw/feishu@2026.3.2",
+        "integrity": "sha512-CpwjmLCS8gpZ5fFCRiEA+1i/L+E73Vhz5//TiwQjWJOtVPZEu44db294g3HUR6nB5L0IEpZgKU/JU69HgYl77w==",
+        "shasum": "ad77e27633b480f5c815e1922252a2f07c1765bd",
+        "resolvedAt": "2026-03-05T11:48:26.864Z",
+        "installedAt": "2026-03-05T11:48:32.624Z"
+      }
     }
   }
 }

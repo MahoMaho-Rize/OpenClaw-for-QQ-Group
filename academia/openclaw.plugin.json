@@ -1,0 +1,8 @@
+{
+  "id": "academia",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

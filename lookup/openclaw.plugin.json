@@ -1,0 +1,8 @@
+{
+  "id": "lookup",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

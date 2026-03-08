@@ -1,0 +1,8 @@
+{
+  "id": "trivia",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

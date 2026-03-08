@@ -1,0 +1,8 @@
+{
+  "id": "space",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

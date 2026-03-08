@@ -1,0 +1,8 @@
+{
+  "id": "sports",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "douban",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

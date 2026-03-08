@@ -24,8 +24,9 @@ feishu/
 openclaw.json
 !openclaw.json.example
 
-# Deployment scripts with server info
-# sync-to-hk.sh is tracked but contains no secrets (IP only, no keys)
+# Deployment scripts (contain server IPs and internal network info)
+sync-to-hk.sh
+scripts/
 
 # Runtime data
 *.sqlite

@@ -13,7 +13,7 @@
     "mode": "merge",
     "providers": {
       "custom": {
-        "baseUrl": "http://REDACTED_LAN_IP:8088/api",
+        "baseUrl": "http://YOUR_LLM_API_HOST:8088/api",
         "apiKey": "YOUR_CRYPTORANK_API_KEY",
         "api": "anthropic-messages",
         "models": [

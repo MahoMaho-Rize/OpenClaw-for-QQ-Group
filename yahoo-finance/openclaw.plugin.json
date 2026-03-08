@@ -1,0 +1,8 @@
+{
+  "id": "yahoo-finance",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

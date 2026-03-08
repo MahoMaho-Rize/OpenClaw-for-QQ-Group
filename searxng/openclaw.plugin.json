@@ -1,0 +1,8 @@
+{
+  "id": "searxng",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

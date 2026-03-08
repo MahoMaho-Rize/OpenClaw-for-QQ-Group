@@ -14,7 +14,10 @@
 ├─ 提到「股票/A股/个股/大盘/K线/板块/北向/ETF/龙虎榜/CPI/PPI/PMI/财经新闻」
 │  → 进入 [A股/中国金融]
 │
-├─ 提到「汇率/外币/换算/美元/欧元/日元/英镑」（不涉及A股）
+├─ 提到「美股/港股/日股/纳斯达克/道琼斯/标普/恒生/海外股市/特斯拉/苹果股价/腾讯股价」
+│  → 进入 [美股/港股/全球市场]
+│
+├─ 提到「汇率/外币/换算/美元/欧元/日元/英镑」（不涉及股票）
 │  → exchange_rate
 │
 ├─ 提到「比特币/BTC/ETH/加密货币/币价/crypto」
@@ -57,7 +60,7 @@
 │  → fandom
 │
 ├─ 想要「二次元图片/角色图/ACG图」
-│  → image_search (source=safebooru 优先; 真实照片用 bing)
+│  → image_search (source=danbooru; 真实照片用 web_search)
 │
 ├─ 提到「豆瓣/电影推荐/书评/评分」
 │  → douban_search
@@ -137,8 +140,17 @@
 ├─ 问「用了多少token/额度」
 │  → usage
 │
+├─ 提到「Reddit/reddit/r/xxx/subreddit」
+│  → 进入 [Reddit]
+│
+├─ 提到「GitHub/github/仓库/开源项目/某repo/star数」
+│  → 进入 [GitHub]
+│
+├─ 提到「电竞/CSGO/CS2/Valorant/DOTA2/LOL战队/选手排名/赛事/HLTV/Liquipedia」
+│  → 进入 [电竞]
+│
 ├─ 以上都不匹配 / 需要搜索互联网
-│  → bing
+│  → web_search (SearXNG 元搜索)
 │
 └─ 给了一张图让你找来源
    → yandex (以图搜图)
@@ -188,7 +200,45 @@
 **⚠ 易混淆点**：
 - 用户说"汇率"→ `exchange_rate`（不是 akshare）
 - 用户说"比特币"→ `crypto_price`（不是 akshare）
-- 用户说"美股/港股"→ akshare 不支持，用 `bing` 搜索
+- 用户说"美股/港股"→ 用 `stock_quote` / `stock_chart`（Yahoo Finance），不是 akshare
+
+### [美股/港股/全球市场]
+
+Yahoo Finance 全球股票行情（美股、港股、日股、欧洲、全球指数）。
+支持中文名称自动映射（特斯拉→TSLA、腾讯→0700.HK 等）。
+
+```
+├─ "特斯拉/苹果/英伟达多少钱 / 某美股价格"
+│  → stock_quote (传代码如 TSLA 或中文名)
+│
+├─ "腾讯/美团/小米股价 / 某港股价格"
+│  → stock_quote (港股加 .HK 后缀，如 0700.HK；中文名自动映射)
+│
+├─ "全球股市怎么样 / 美股今天如何 / 海外市场"
+│  → market_overview (region: all/us/hk/jp/eu)
+│
+├─ "特斯拉K线 / 某股走势 / 历史行情"
+│  → stock_chart (symbol + range: 1d/1mo/1y + interval: 1d/1wk)
+│
+├─ "不知道股票代码 / 搜索某公司"
+│  → stock_search (关键词搜索，返回匹配的股票列表)
+│
+└─ "纳斯达克/标普500/恒生指数/日经"（指数行情）
+   → stock_quote (^GSPC/^DJI/^IXIC/^HSI/^N225)
+   或 market_overview 一键看全部
+```
+
+**⚠ 关键区分**：
+- A股（沪深股票、上证指数、创业板等）→ `akshare_*` 系列
+- 美股/港股/日股/全球指数 → `stock_quote` / `stock_chart` / `market_overview`
+- 汇率 → `exchange_rate`（不是 stock 系列）
+- 加密货币 → `crypto_price`（不是 stock 系列）
+
+**常用代码速查**：
+- 美股：AAPL、TSLA、NVDA、MSFT、GOOGL、AMZN、META
+- 中概股：BABA、PDD、JD、NIO、XPEV、LI、BILI
+- 港股：0700.HK（腾讯）、9988.HK（阿里）、3690.HK（美团）、1810.HK（小米）
+- 指数：^GSPC（标普）、^DJI（道指）、^IXIC（纳指）、^HSI（恒指）、^N225（日经）
 
 ### [Steam]
 
@@ -233,7 +283,7 @@
 - 中文地名需要先用 transit_search 或让 transit_route 自动 geocode
 - 日本站名建议用日文/英文（如 Shinjuku, 新宿）
 - 中国高铁/公交覆盖较弱（Transitous主要覆盖日本、欧洲、北美）
-- 如果查不到路线，用 `bing` 兜底搜索
+- 如果查不到路线，用 `web_search` 兜底搜索
 
 ### [五大联赛]
 
@@ -305,6 +355,78 @@ NBA 篮球数据（ESPN API）。
 - 搜索直链始终可用，用户点击即可查看完整结果
 - 平台别名：日亚=Amazon JP、骏河屋=Suruga-ya、煤炉=Mercari
 
+### [Reddit]
+
+Reddit 社区搜索、热帖、帖子详情。
+
+```
+├─ "Reddit上怎么说 / Reddit讨论 / r/xxx"
+│  → reddit_search (搜索帖子，可限定subreddit)
+│
+├─ "Reddit热帖 / r/xxx最火的帖子"
+│  → reddit_hot (subreddit可选，排序hot/new/top/rising)
+│
+├─ 给了Reddit帖子URL / 想看评论
+│  → reddit_post (返回帖子+热门评论)
+│
+└─ "r/xxx是什么社区 / 有多少人"
+   → reddit_subreddit (社区基本信息)
+```
+
+### [GitHub]
+
+GitHub 仓库搜索、项目详情、Issues、用户、趋势。
+
+```
+├─ "GitHub上有没有XX / 搜开源项目 / 找XX库"
+│  → github_search (支持language/stars筛选)
+│
+├─ "XX项目详情 / torvalds/linux / 最近更新"
+│  → github_repo (传owner/name，返回详情+最近commit+release)
+│
+├─ "XX项目的issue / bug / 功能请求"
+│  → github_issues (可按state/labels/关键词筛选)
+│
+├─ "XX是谁 / GitHub用户 / 某开发者"
+│  → github_user (返回个人信息+top repos)
+│
+└─ "GitHub最近热门 / trending / 今天流行什么"
+   → github_trending (可选language和时间范围)
+```
+
+### [电竞]
+
+电竞赛事数据（Liquipedia Wiki + HLTV）。
+⚠ HLTV 可能被封锁，此时会返回友好提示，用 Liquipedia 兜底。
+
+```
+├─ 想搜电竞相关词条（战队/选手/赛事）
+│  → liquipedia_search (game: counterstrike/valorant/dota2/leagueoflegends)
+│
+├─ 想看 Liquipedia 某词条内容
+│  → liquipedia_read (先用 liquipedia_search 或 liquipedia_sections 获取标题)
+│
+├─ "XX战队阵容 / roster"
+│  → liquipedia_roster (game + teamName)
+│
+├─ "XX选手信息"
+│  → liquipedia_player (game + playerName)
+│
+├─ "XX赛事信息 / 某锦标赛"
+│  → liquipedia_tournament (game + tournamentName)
+│
+├─ "CSGO/CS2世界排名 / HLTV排名"
+│  → hltv_ranking (⚠ 可能不可用)
+│
+└─ "HLTV新闻 / CS赛事新闻"
+   → hltv_news (⚠ 可能不可用)
+```
+
+**⚠ 注意**：
+- Liquipedia 需要指定游戏：`counterstrike`、`valorant`、`dota2`、`leagueoflegends`
+- HLTV 工具如果返回错误，改用 `liquipedia_search` + `web_search` 组合兜底
+- 用户说"电竞"但没指定游戏 → 根据上下文判断，不确定时问用户
+
 ### [航空]
 
 ```
@@ -320,23 +442,31 @@ NBA 篮球数据（ESPN API）。
 |---------|-----------|-----------|------|
 | "美元兑人民币多少" | akshare_* | exchange_rate | 汇率不是A股 |
 | "比特币现在多少" | akshare_* | crypto_price | 加密货币不是A股 |
-| "帮我搜个论文" | bing | arxiv/scholar/pubmed | 有专用学术工具 |
-| "这个角色是谁"(二次元) | bing | moegirl 或 bangumi | ACG角色用ACG百科 |
-| "茅台股票怎么样" | bing | akshare_stock_info | 个股信息有专用工具 |
-| "给我来张灵梦的图" | bing | image_search(safebooru) | 二次元角色图用safebooru |
+| "帮我搜个论文" | web_search | arxiv/scholar/pubmed | 有专用学术工具 |
+| "这个角色是谁"(二次元) | web_search | moegirl 或 bangumi | ACG角色用ACG百科 |
+| "茅台股票怎么样" | web_search | akshare_stock_info | 个股信息有专用工具 |
+| "给我来张灵梦的图" | web_search | image_search(danbooru) | 二次元角色图用danbooru |
 | "今天A股怎么样" | exchange_rate | akshare_stock_spot | 大盘行情用akshare |
-| "美股特斯拉" | akshare_* | bing | akshare只支持A股 |
+| "美股特斯拉" | akshare_* | stock_quote(TSLA) | akshare只支持A股，美股用Yahoo Finance |
+| "港股腾讯" | akshare_* | stock_quote(0700.HK) | 港股用Yahoo Finance |
+| "纳斯达克今天" | akshare_* | market_overview(us) | 海外指数用market_overview |
+| "恒生指数" | akshare_* | stock_quote(^HSI) | 港股指数用Yahoo Finance |
 | "东方project角色" | moegirl | thbwiki | 东方专用wiki更准 |
 | "高达设定" | moegirl | fandom | 高达用fandom wiki |
-| "东京到大阪怎么走" | bing | transit_route | 公交出行有专用工具 |
-| "新宿站时刻表" | bing | transit_departures | 车站时刻表有专用工具 |
-| "英超积分榜" | bing | football_standings | 五大联赛有专用工具 |
-| "今天NBA比分" | bing | nba_scores | NBA有专用工具 |
-| "大谷翔平数据" | bing | mlb_player | MLB有专用工具 |
+| "东京到大阪怎么走" | web_search | transit_route | 公交出行有专用工具 |
+| "新宿站时刻表" | web_search | transit_departures | 车站时刻表有专用工具 |
+| "英超积分榜" | web_search | football_standings | 五大联赛有专用工具 |
+| "今天NBA比分" | web_search | nba_scores | NBA有专用工具 |
+| "大谷翔平数据" | web_search | mlb_player | MLB有专用工具 |
 | "足球比赛"(没说联赛) | football_standings | football_scores(epl) | 默认英超 |
-| "转会消息/谁要签约" | bing | football_transfer_news | 转会流言有专用工具 |
-| "日本买手办" | bing | jp_search | 日本电商有专用工具 |
-| "骏河屋价格" | bing | jp_search(surugaya) | 指定平台搜索 |
+| "转会消息/谁要签约" | web_search | football_transfer_news | 转会流言有专用工具 |
+| "日本买手办" | web_search | jp_search | 日本电商有专用工具 |
+| "骏河屋价格" | web_search | jp_search(surugaya) | 指定平台搜索 |
+| "Reddit上怎么评价" | web_search | reddit_search | Reddit有专用工具 |
+| "GitHub上有没有XX" | web_search | github_search | GitHub有专用工具 |
+| "XX项目issue" | web_search | github_issues | Issues有专用工具 |
+| "CS2世界排名" | web_search | hltv_ranking/liquipedia_search | 电竞有专用工具 |
+| "某电竞选手" | web_search | liquipedia_player | 电竞有专用工具 |
 
 ---
 
@@ -353,12 +483,14 @@ NBA 篮球数据（ESPN API）。
   - "东京到京都怎么坐车+京都天气" → `transit_route` + `weather_forecast` ✅
   - "英超和西甲今天比分" → `football_scores(epl)` + `football_scores(laliga)` ✅
   - "NBA排名+今天比分" → `nba_standings` + `nba_scores` ✅
+  - "这个项目GitHub上有issue吗+Reddit怎么说" → `github_issues` + `reddit_search` ✅
+  - "GitHub trending+某语言" → `github_trending(language)` ✅
 
 ---
 
 ## 兜底策略
 
 如果决策树里找不到匹配的分支：
-1. 先想想是不是可以用 `bing` 搜索解决
+1. 先想想是不是可以用 `web_search`（SearXNG）搜索解决
 2. 如果用户给了 URL → `url_reader`
 3. 如果纯粹闲聊/观点/情感 → **不需要任何工具**，直接回复

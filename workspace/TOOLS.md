@@ -110,6 +110,9 @@
 ├─ 提到「MLB/棒球/大联盟/洋基/道奇/大谷翔平」
 │  → 进入 [MLB]
 │
+├─ 提到「日本购物/日亚/骏河屋/Mercari/乐天/Animate/日本代购/手办价格」
+│  → 进入 [日本电商]
+│
 ├─ 提到「物种/动物/植物/分类学/学名」
 │  → gbif_species_search
 │
@@ -282,6 +285,26 @@ NBA 篮球数据（ESPN API）。
    → mlb_player (playerName)
 ```
 
+### [日本电商]
+
+日本五大电商平台搜索（Amazon JP/骏河屋/Mercari/乐天/Animate）。
+返回各平台搜索直链 + Bing 搜索到的商品摘要/价格。
+
+```
+├─ "XX在日本多少钱 / 搜一下日本的XX / 日代XX"
+│  → jp_search (keyword, 可选platform指定平台)
+│
+└─ "对比各平台价格 / 哪里最便宜 / 比价"
+   → jp_price_compare (keyword)
+```
+
+**⚠ 注意**：
+- 关键词用日文/英文效果最佳（如 ガンダム、hatsune miku figure）
+- 中文关键词也可用，但搜索精度略低
+- 价格数据来自 Bing 搜索摘要，仅供参考
+- 搜索直链始终可用，用户点击即可查看完整结果
+- 平台别名：日亚=Amazon JP、骏河屋=Suruga-ya、煤炉=Mercari
+
 ### [航空]
 
 ```
@@ -312,6 +335,8 @@ NBA 篮球数据（ESPN API）。
 | "大谷翔平数据" | bing | mlb_player | MLB有专用工具 |
 | "足球比赛"(没说联赛) | football_standings | football_scores(epl) | 默认英超 |
 | "转会消息/谁要签约" | bing | football_transfer_news | 转会流言有专用工具 |
+| "日本买手办" | bing | jp_search | 日本电商有专用工具 |
+| "骏河屋价格" | bing | jp_search(surugaya) | 指定平台搜索 |
 
 ---
 

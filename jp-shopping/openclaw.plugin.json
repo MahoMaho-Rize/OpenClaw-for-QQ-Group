@@ -1,0 +1,8 @@
+{
+  "id": "jp-shopping",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

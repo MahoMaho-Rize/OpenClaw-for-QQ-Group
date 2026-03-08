@@ -10,7 +10,8 @@ import * as zlib from "node:zlib";
 /* ------------------------------------------------------------------ */
 
 const REQUEST_TIMEOUT = 15_000;
-const USER_AGENT = "OpenClaw-Bot/1.0";
+const FOOD_TIMEOUT = 25_000; // OpenFoodFacts can be slow
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function httpGet(url: string, timeout = REQUEST_TIMEOUT): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
@@ -62,7 +63,7 @@ const plugin = {
         if (!barcode) return { error: "缺少必填参数: barcode" };
         try {
           const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`;
-          const res = await httpGet(url);
+          const res = await httpGet(url, FOOD_TIMEOUT);
           if (res.status !== 200) return { error: `OpenFoodFacts 返回 HTTP ${res.status}` };
           const json = JSON.parse(res.data);
           if (json.status !== 1 || !json.product) return { error: "未找到该条码对应的商品" };
@@ -147,6 +148,7 @@ const plugin = {
       label: "实时航班查询",
       description: `实时查询航班位置信息，数据来自 OpenSky Network。
 支持按ICAO24地址、呼号或地理区域（经纬度边界框）查询。
+注意：OpenSky 匿名 API 有速率限制（约10秒/次），繁忙时可能返回 429/403。
 
 使用场景：
 - "查一下CCA981航班在哪"
@@ -180,6 +182,7 @@ const plugin = {
             return { error: "请至少提供 icao24、callsign 或完整的边界框参数" };
           }
           const res = await httpGet(url, OPENSKY_TIMEOUT);
+          if (res.status === 403 || res.status === 429) return { error: `OpenSky API 速率限制或拒绝访问 (HTTP ${res.status})。匿名API有调用频率限制，请稍后再试。` };
           if (res.status !== 200) return { error: `OpenSky 返回 HTTP ${res.status}` };
           const json = JSON.parse(res.data);
           let states: any[] = json.states ?? [];

@@ -8,7 +8,7 @@ import zlib from "node:zlib";
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-const REQUEST_TIMEOUT = 15_000;
+const REQUEST_TIMEOUT = 25_000;
 const USER_AGENT = "OpenClaw-Bot/1.0";
 
 function httpGet(url: string, timeout = REQUEST_TIMEOUT): Promise<{ status: number; data: string }> {
@@ -38,8 +38,8 @@ function httpGet(url: string, timeout = REQUEST_TIMEOUT): Promise<{ status: numb
   });
 }
 
-/** MusicBrainz requires a User-Agent with contact info. */
-function mbGet(url: string, timeout = REQUEST_TIMEOUT): Promise<{ status: number; data: string }> {
+/** MusicBrainz requires a User-Agent with contact info. Longer timeout for slow API. */
+function mbGet(url: string, timeout = 30_000): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;

@@ -278,18 +278,10 @@ function formatTournamentInfo(info: Record<string, string>, introText: string): 
 //  Part 2: HLTV — CS2 专用数据 (via npm hltv package)
 // ═══════════════════════════════════════════════════════════════════
 
-// Lazy-load hltv to avoid crash if dep missing
-let HLTV: any = null;
-function getHLTV(): any {
-  if (!HLTV) {
-    try {
-      HLTV = require("hltv").HLTV;
-    } catch {
-      throw new Error("hltv npm package not installed. Run: npm install hltv");
-    }
-  }
-  return HLTV;
-}
+// HLTV tools are DISABLED — hltv.org is behind Cloudflare bot protection
+// which blocks all server-side requests (both the npm package and direct HTTP).
+// Liquipedia's CS2 wiki is the fallback for CS2 data.
+const HLTV_DISABLED_MSG = "HLTV 工具暂不可用 — hltv.org 启用了 Cloudflare 反爬虫保护，服务端无法访问。请改用 liquipedia_search/liquipedia_player/liquipedia_roster (wiki=cs2) 查询 CS2 数据。";
 
 // ═══════════════════════════════════════════════════════════════════
 //  OpenClaw Plugin Registration
@@ -600,170 +592,55 @@ export default {
     //  HLTV Tools — CS2 专用
     // ═══════════════════════════════════════════════════════════
 
-    // ─── Tool 7: CS2 世界排名 ───
+    // ─── HLTV Tools (disabled — Cloudflare blocks server-side access) ───
+    // Register them so the bot knows they exist but returns a helpful message
     api.registerTool({
       name: "hltv_ranking",
-      description:
-        "获取 HLTV CS2 世界战队排名。返回排名、队名、积分。数据来自 hltv.org 官方排名。",
+      description: "获取 HLTV CS2 世界战队排名（当前不可用，请用 liquipedia_search wiki=cs2 代替）。",
       parameters: Type.Object({
-        top: Type.Optional(
-          Type.Number({ description: "显示前N名(1-30), 默认20", default: 20 }),
-        ),
+        top: Type.Optional(Type.Number({ description: "显示前N名", default: 20 })),
       }),
-      execute: async (_id: string, p: any) => {
-        try {
-          const hltv = getHLTV();
-          const ranking = await hltv.getTeamRanking();
-          const top = Math.min(Math.max(p.top || 20, 1), 30);
-          const lines = ranking.slice(0, top).map((t: any) =>
-            `#${String(t.place).padStart(2)} ${t.team.name.padEnd(20)} 积分: ${t.points}`,
-          );
-          return `HLTV CS2 世界排名 (Top ${top}):\n${lines.join("\n")}`;
-        } catch (e: any) {
-          if (e.message?.includes("Access denied")) return "HLTV 被 Cloudflare 拦截, 请稍后重试";
-          throw e;
-        }
-      },
+      execute: async () => HLTV_DISABLED_MSG,
     });
 
-    // ─── Tool 8: CS2 战队详情 ───
     api.registerTool({
       name: "hltv_team",
-      description:
-        "查询 HLTV CS2 战队详情 — 排名、阵容、国籍。支持按名称搜索。",
+      description: "查询 HLTV CS2 战队详情（当前不可用，请用 liquipedia_roster wiki=cs2 代替）。",
       parameters: Type.Object({
-        name: Type.String({ description: "战队名称, 如 Vitality, NAVI, G2, Spirit" }),
+        name: Type.String({ description: "战队名称" }),
       }),
-      execute: async (_id: string, p: any) => {
-        try {
-          const hltv = getHLTV();
-          const team = await hltv.getTeamByName({ name: p.name });
-          const lines = [
-            `战队: ${team.name}`,
-            `世界排名: #${team.rank || "N/A"}`,
-            `地区: ${team.country?.name || "N/A"}`,
-            "",
-            "阵容:",
-            ...(team.players || []).map((pl: any) => `  ${pl.name} (ID: ${pl.id})`),
-          ];
-          return lines.join("\n");
-        } catch (e: any) {
-          if (e.message?.includes("Access denied")) return "HLTV 被 Cloudflare 拦截, 请稍后重试";
-          if (e.message?.includes("not found")) return `HLTV 未找到战队 "${p.name}"`;
-          throw e;
-        }
-      },
+      execute: async () => HLTV_DISABLED_MSG,
     });
 
-    // ─── Tool 9: CS2 选手详情 ───
     api.registerTool({
       name: "hltv_player",
-      description:
-        "查询 HLTV CS2 选手详情 — 真名、国籍、年龄、Rating、所属战队。需要知道选手 HLTV ID (可先用 liquipedia 搜索)。",
+      description: "查询 HLTV CS2 选手详情（当前不可用，请用 liquipedia_player wiki=cs2 代替）。",
       parameters: Type.Object({
-        id: Type.Optional(Type.Number({ description: "HLTV 选手ID, 如 s1mple=7998" })),
-        name: Type.Optional(Type.String({ description: "选手名, 如 s1mple, ZywOo, donk" })),
+        id: Type.Optional(Type.Number({ description: "HLTV 选手ID" })),
+        name: Type.Optional(Type.String({ description: "选手名" })),
       }),
-      execute: async (_id: string, p: any) => {
-        try {
-          const hltv = getHLTV();
-          let player: any;
-          if (p.id) {
-            player = await hltv.getPlayer({ id: p.id });
-          } else if (p.name) {
-            player = await hltv.getPlayerByName({ name: p.name });
-          } else {
-            return "请提供选手 id 或 name";
-          }
-          const lines = [
-            `选手: ${player.ign || player.name}`,
-            `真名: ${player.name}`,
-            `国籍: ${player.country?.name || "N/A"}`,
-            `年龄: ${player.age || "N/A"}`,
-            `队伍: ${player.team?.name || "N/A"}`,
-            `Rating: ${player.statistics?.rating || "N/A"}`,
-            `Maps played: ${player.statistics?.mapsPlayed || "N/A"}`,
-          ];
-          return lines.join("\n");
-        } catch (e: any) {
-          if (e.message?.includes("Access denied")) return "HLTV 被 Cloudflare 拦截, 请稍后重试";
-          if (e.message?.includes("not found") || e.message?.includes("Cannot read")) return `HLTV 未找到选手 "${p.name || p.id}"`;
-          throw e;
-        }
-      },
+      execute: async () => HLTV_DISABLED_MSG,
     });
 
-    // ─── Tool 10: CS2 新闻 ───
     api.registerTool({
       name: "hltv_news",
-      description:
-        "获取 HLTV CS2 最新新闻标题和链接。",
+      description: "获取 HLTV CS2 最新新闻（当前不可用，请用 liquipedia_search wiki=cs2 搜索赛事新闻）。",
       parameters: Type.Object({
-        count: Type.Optional(
-          Type.Number({ description: "新闻条数(1-30), 默认15", default: 15 }),
-        ),
+        count: Type.Optional(Type.Number({ description: "新闻条数", default: 15 })),
       }),
-      execute: async (_id: string, p: any) => {
-        try {
-          const hltv = getHLTV();
-          const news = await hltv.getNews();
-          const count = Math.min(Math.max(p.count || 15, 1), 30);
-          const lines = news.slice(0, count).map((n: any, i: number) => {
-            const date = n.date ? new Date(n.date).toISOString().slice(0, 10) : "";
-            return `${i + 1}. [${date}] ${n.title}\n   ${n.link || ""}`;
-          });
-          return `HLTV CS2 新闻 (最新${lines.length}条):\n\n${lines.join("\n\n")}`;
-        } catch (e: any) {
-          // Fallback to RSS
-          try {
-            const rss = await lpGet("https://www.hltv.org/rss/news");
-            const items = [...rss.matchAll(/<item>\s*<title>([^<]*)<\/title>\s*<description>([^<]*)<\/description>\s*<link>([^<]*)<\/link>/g)];
-            const count = Math.min(Math.max(p.count || 15, 1), 30);
-            const lines = items.slice(0, count).map((m, i) =>
-              `${i + 1}. ${m[1].trim()}\n   ${m[2].trim()}\n   ${m[3].trim()}`,
-            );
-            return `HLTV CS2 新闻 (RSS, 最新${lines.length}条):\n\n${lines.join("\n\n")}`;
-          } catch {
-            return "HLTV 新闻获取失败";
-          }
-        }
-      },
+      execute: async () => HLTV_DISABLED_MSG,
     });
 
-    // ─── Tool 11: CS2 赛事详情 ───
     api.registerTool({
       name: "hltv_event",
-      description:
-        "查询 HLTV CS2 赛事详情 — 名称、日期、奖金、参赛队伍。需要赛事 ID。常见赛事: PGL Major Copenhagen 2024 = 7148",
+      description: "查询 HLTV CS2 赛事详情（当前不可用，请用 liquipedia_tournament wiki=cs2 代替）。",
       parameters: Type.Object({
         id: Type.Number({ description: "HLTV 赛事ID" }),
       }),
-      execute: async (_id: string, p: any) => {
-        try {
-          const hltv = getHLTV();
-          const event = await hltv.getEvent({ id: p.id });
-          const lines = [
-            `赛事: ${event.name}`,
-            `日期: ${event.dateStart ? new Date(event.dateStart).toISOString().slice(0, 10) : "N/A"} ~ ${event.dateEnd ? new Date(event.dateEnd).toISOString().slice(0, 10) : "N/A"}`,
-            `地点: ${event.location?.name || "Online"}`,
-            `奖金池: $${event.prizePool || "N/A"}`,
-            `队伍数: ${event.numberOfTeams || "N/A"}`,
-          ];
-          if (event.teams?.length) {
-            lines.push("", "参赛队伍:");
-            event.teams.forEach((t: any) => {
-              lines.push(`  ${t.name} (#${t.rankDuringEvent || "?"})`);
-            });
-          }
-          return lines.join("\n");
-        } catch (e: any) {
-          if (e.message?.includes("Access denied")) return "HLTV 被 Cloudflare 拦截, 请稍后重试";
-          throw e;
-        }
-      },
+      execute: async () => HLTV_DISABLED_MSG,
     });
 
-    console.log("[esports] Registered 5 HLTV CS2 tools (ranking/team/player/news/event)");
-    console.log("[esports] Total: 11 esports tools ready");
+    console.log("[esports] Registered 5 HLTV CS2 tools (DISABLED — Cloudflare blocked, returning fallback messages)");
+    console.log("[esports] Total: 11 esports tools (6 Liquipedia active + 5 HLTV disabled)");
   },
 };

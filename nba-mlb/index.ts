@@ -10,7 +10,7 @@ import * as zlib from "node:zlib";
 /* ------------------------------------------------------------------ */
 
 const REQUEST_TIMEOUT = 15_000;
-const USER_AGENT = "OpenClaw-Bot/1.0";
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const ESPN_BASE = "https://site.api.espn.com";
 const MLB_API = "https://statsapi.mlb.com";
 

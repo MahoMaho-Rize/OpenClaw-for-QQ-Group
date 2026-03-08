@@ -388,11 +388,9 @@ async function danbooruAutocompleteTags(query: string): Promise<DanbooruTag[]> {
   }
 }
 
-/** Search Danbooru posts by tags. Defaults to rating:general,sensitive (SFW) */
+/** Search Danbooru posts by tags. No rating filter — all content returned. */
 async function danbooruSearchPosts(tags: string, count: number, page: number = 1): Promise<DanbooruPost[]> {
-  // Add rating filter to exclude explicit/questionable content
-  const safeTags = `${tags} rating:general,sensitive`;
-  const url = `${DANBOORU_BASE}/posts.json?tags=${encodeURIComponent(safeTags)}&limit=${count}&page=${page}`;
+  const url = `${DANBOORU_BASE}/posts.json?tags=${encodeURIComponent(tags)}&limit=${count}&page=${page}`;
   const res = await httpGet(url, { timeout: 15_000 });
   if (res.status !== 200) return [];
   try {
@@ -494,7 +492,7 @@ const plugin = {
       label: "图片搜索",
       description: `通过 Danbooru / Bing / Yandex 图片搜索找图片。返回图片的直链URL。
 支持三个搜索引擎，各有优势：
-- **danbooru**: 二次元角色图片专用。最大的 Booru 风格图库，用英文/罗马字 tag 搜索（如 hakurei_reimu, akiyama_mizuki）。图片质量极高、标签精确、自动过滤 NSFW（仅返回 general + sensitive）。**ACG 角色首选**。
+- **danbooru**: 二次元角色图片专用。最大的 Booru 风格图库，用英文/罗马字 tag 搜索（如 hakurei_reimu, akiyama_mizuki）。图片质量极高、标签精确、包含所有评级内容。**ACG 角色首选**。
 - **bing**: 适合通用搜索、真人、中文关键词，国内可直连
 - **yandex**: 适合动漫/二次元角色、插画，俄系搜索引擎对 ACG 内容覆盖好
 - **both**: 同时搜 Bing + Yandex 两个引擎，去重后合并结果

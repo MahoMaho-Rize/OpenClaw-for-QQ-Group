@@ -20,6 +20,9 @@
 ├─ 提到「汇率/外币/换算/美元/欧元/日元/英镑」（不涉及股票）
 │  → exchange_rate
 │
+├─ 提到「期货/大宗商品/黄金/金价/原油/油价/白银/天然气/铜价/玉米/大豆/小麦/棉花/咖啡」
+│  → 进入 [期货/大宗商品]
+│
 ├─ 提到「比特币/BTC/ETH/加密货币/币价/crypto」
 │  → crypto_price
 │
@@ -201,6 +204,29 @@
 - 用户说"汇率"→ `exchange_rate`（不是 akshare）
 - 用户说"比特币"→ `crypto_price`（不是 akshare）
 - 用户说"美股/港股"→ 用 `stock_quote` / `stock_chart`（Yahoo Finance），不是 akshare
+
+### [期货/大宗商品]
+
+全球大宗商品期货实时行情（CME/NYMEX/CBOT）。
+支持中文名称自动映射（黄金→GC=F、原油→CL=F 等）。
+
+```
+├─ "黄金/原油/白银多少钱 / 某商品价格"
+│  → commodity_price (传名称如 黄金 或代码 GC=F，支持多个逗号分隔)
+│
+├─ "大宗商品行情 / 期货市场怎么样 / 金价油价"
+│  → commodity_overview (category: all/metals/energy/agriculture)
+│
+└─ "黄金走势 / 原油K线 / 某商品历史"
+   → commodity_chart (name + range: 1d/1mo/1y)
+```
+
+**⚠ 关键区分**：
+- 大宗商品期货（黄金、原油、农产品等）→ commodity_* 系列
+- 美股/港股个股 → stock_quote / stock_chart
+- A股 → akshare_* 系列
+- 汇率 → exchange_rate
+- 加密货币 → crypto_price
 
 ### [美股/港股/全球市场]
 

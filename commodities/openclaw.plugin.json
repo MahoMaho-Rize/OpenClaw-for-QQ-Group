@@ -1,0 +1,8 @@
+{
+  "id": "commodities",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,77 +1,312 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import * as https from "node:https";
-import * as http from "node:http";
+import * as net from "node:net";
+import * as tls from "node:tls";
 import * as zlib from "node:zlib";
 
 /* ------------------------------------------------------------------ */
-/*  JP Shopping Plugin — 日本电商比价搜索                                */
-/*  Amazon JP / 骏河屋 / Mercari / 乐天 / Animate                      */
-/*  Strategy: search URL generation + SearXNG (google,bing) scraping    */
+/*  JP Shopping Plugin — 日本电商比价搜索 (v2 – direct scraping)       */
+/*  Amazon JP / 楽天 / Mercari / 駿河屋 / Animate                      */
+/*  Strategy: WARP SOCKS5 → direct platform scraping (HTML + JSON-LD) */
 /* ------------------------------------------------------------------ */
 
-const REQUEST_TIMEOUT = 15_000;
+const REQUEST_TIMEOUT = 20_000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-function httpGet(
-  url: string,
+const WARP_HOST = "127.0.0.1";
+const WARP_PORT = 40000;
+
+/* ---- SOCKS5 + TLS helper (via Cloudflare WARP) ---- */
+
+function socks5HttpsGet(
+  targetHost: string,
+  path: string,
+  extraHeaders: Record<string, string> = {},
   timeout = REQUEST_TIMEOUT
 ): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const mod = u.protocol === "https:" ? https : http;
-    const req = mod.get(
-      {
-        hostname: u.hostname,
-        path: u.pathname + u.search,
-        port: u.port || (u.protocol === "https:" ? 443 : 80),
-        family: 4,
-        timeout,
-        headers: {
-          "User-Agent": USER_AGENT,
-          "Accept-Encoding": "gzip, deflate",
-          Accept: "text/html,application/xhtml+xml,application/json",
-          "Accept-Language": "ja,en;q=0.9,zh-CN;q=0.8",
-        },
-      },
-      (res) => {
-        // Follow redirects
-        if (
-          (res.statusCode === 301 || res.statusCode === 302) &&
-          res.headers.location
-        ) {
-          const loc = res.headers.location.startsWith("http")
-            ? res.headers.location
-            : `${u.protocol}//${u.hostname}${res.headers.location}`;
-          httpGet(loc, timeout).then(resolve).catch(reject);
-          res.resume();
-          return;
+    const sock = net.connect(WARP_PORT, WARP_HOST, () => {
+      // SOCKS5 greeting: version 5, 1 method, no-auth
+      sock.write(Buffer.from([0x05, 0x01, 0x00]));
+    });
+
+    let step = 0;
+    sock.on("data", (data) => {
+      if (step === 0) {
+        // Auth response
+        if (data[0] !== 0x05 || data[1] !== 0x00) {
+          sock.destroy();
+          return reject(new Error("SOCKS5 auth fail"));
         }
-        let stream: NodeJS.ReadableStream = res;
-        const enc = res.headers["content-encoding"];
-        if (enc === "gzip") stream = res.pipe(zlib.createGunzip());
-        else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
-        const chunks: Buffer[] = [];
-        stream.on("data", (c: Buffer) => chunks.push(c));
-        stream.on("end", () =>
-          resolve({
-            status: res.statusCode ?? 0,
-            data: Buffer.concat(chunks).toString("utf8"),
-          })
+        step = 1;
+        // CONNECT request (domain-name mode)
+        const buf = Buffer.alloc(7 + targetHost.length);
+        buf[0] = 0x05; // ver
+        buf[1] = 0x01; // CMD: CONNECT
+        buf[2] = 0x00; // reserved
+        buf[3] = 0x03; // ATYP: domain
+        buf[4] = targetHost.length;
+        buf.write(targetHost, 5);
+        buf.writeUInt16BE(443, 5 + targetHost.length);
+        sock.write(buf);
+      } else if (step === 1) {
+        // CONNECT response
+        if (data[0] !== 0x05 || data[1] !== 0x00) {
+          sock.destroy();
+          return reject(new Error("SOCKS5 connect fail"));
+        }
+        step = 2;
+        // TLS handshake over the proxied TCP socket
+        const tlsSock = tls.connect(
+          { socket: sock, servername: targetHost },
+          () => {
+            const req = https.get(
+              {
+                hostname: targetHost,
+                path,
+                createConnection: () => tlsSock as any,
+                headers: {
+                  "User-Agent": USER_AGENT,
+                  "Accept-Language": "ja,en;q=0.9",
+                  Accept:
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                  "Accept-Encoding": "gzip, deflate",
+                  ...extraHeaders,
+                },
+                timeout,
+              },
+              (res) => {
+                // Handle redirects (up to 3)
+                if (
+                  (res.statusCode === 301 ||
+                    res.statusCode === 302 ||
+                    res.statusCode === 307) &&
+                  res.headers.location
+                ) {
+                  res.resume();
+                  tlsSock.destroy();
+                  try {
+                    const loc = new URL(
+                      res.headers.location,
+                      `https://${targetHost}`
+                    );
+                    socks5HttpsGet(
+                      loc.hostname,
+                      loc.pathname + loc.search,
+                      extraHeaders,
+                      timeout
+                    )
+                      .then(resolve)
+                      .catch(reject);
+                  } catch {
+                    reject(new Error(`Bad redirect: ${res.headers.location}`));
+                  }
+                  return;
+                }
+
+                // Decompress if needed
+                let stream: NodeJS.ReadableStream = res;
+                const enc = res.headers["content-encoding"];
+                if (enc === "gzip") {
+                  stream = res.pipe(zlib.createGunzip());
+                } else if (enc === "deflate") {
+                  stream = res.pipe(zlib.createInflate());
+                }
+
+                const chunks: Buffer[] = [];
+                stream.on("data", (c: Buffer) => chunks.push(c));
+                stream.on("end", () =>
+                  resolve({
+                    status: res.statusCode ?? 0,
+                    data: Buffer.concat(chunks).toString("utf8"),
+                  })
+                );
+                stream.on("error", reject);
+              }
+            );
+            req.on("error", reject);
+            req.on("timeout", () => {
+              req.destroy();
+              reject(new Error("HTTP timeout"));
+            });
+          }
         );
-        stream.on("error", reject);
+        tlsSock.on("error", reject);
       }
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy();
-      reject(new Error(`Timeout ${timeout}ms`));
+    });
+    sock.on("error", reject);
+    sock.setTimeout(timeout, () => {
+      sock.destroy();
+      reject(new Error("SOCKS5 socket timeout"));
     });
   });
 }
 
-/* ---- Platform definitions ---- */
+/* ---- HTML entity decoder ---- */
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+
+function stripTags(html: string): string {
+  return decodeEntities(html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+/* ---- Product type ---- */
+
+interface Product {
+  platform: string;
+  title: string;
+  price: string | null;
+  url: string;
+  rating?: string | null;
+  reviews?: string | null;
+}
+
+/* ================================================================== */
+/*  Amazon JP Scraper                                                  */
+/*  WARP SOCKS5 → HTML scraping with i18n-prefs=JPY cookie            */
+/* ================================================================== */
+
+async function scrapeAmazonJP(keyword: string, limit = 8): Promise<Product[]> {
+  const path = `/s?k=${encodeURIComponent(keyword)}`;
+  const res = await socks5HttpsGet("www.amazon.co.jp", path, {
+    Cookie: "i18n-prefs=JPY; lc-acbjp=ja_JP",
+  });
+
+  if (res.status !== 200 || res.data.length < 5000) return [];
+
+  const html = res.data;
+  const products: Product[] = [];
+
+  // Find product blocks via data-asin + data-index
+  const blockRegex = /data-asin="(\w{10})"[^>]*data-index="(\d+)"/g;
+  const blocks: { asin: string; index: string; start: number }[] = [];
+  let bm: RegExpExecArray | null;
+  while ((bm = blockRegex.exec(html)) !== null) {
+    blocks.push({ asin: bm[1], index: bm[2], start: bm.index });
+  }
+
+  const seen = new Set<string>();
+  for (let i = 0; i < blocks.length && products.length < limit; i++) {
+    const { asin, start } = blocks[i];
+    if (seen.has(asin)) continue;
+    seen.add(asin);
+
+    const end = i + 1 < blocks.length ? blocks[i + 1].start : start + 15000;
+    const block = html.substring(start, Math.min(end, start + 15000));
+
+    // Title: inside <h2> tag
+    const h2Match = block.match(/<h2[^>]*>(.*?)<\/h2>/s);
+    if (!h2Match) continue;
+    const title = stripTags(h2Match[1]);
+    if (
+      !title ||
+      title.length < 5 ||
+      /^(次に移動|結果|その他|キーボード|検索結果)/.test(title)
+    )
+      continue;
+
+    // Price: first a-offscreen inside a-price
+    const priceMatch = block.match(
+      /<span class="a-price"[^>]*><span class="a-offscreen">(.*?)<\/span>/
+    );
+    const price = priceMatch ? decodeEntities(priceMatch[1]) : null;
+
+    // Rating
+    const ratingMatch = block.match(
+      /aria-label="5つ星のうち([\d.]+)"/
+    );
+    const rating = ratingMatch ? ratingMatch[1] : null;
+
+    // Review count
+    const reviewMatch = block.match(
+      /aria-label="([\d,]+)件のレビュー"/
+    );
+    const reviews = reviewMatch ? reviewMatch[1] : null;
+
+    products.push({
+      platform: "Amazon JP",
+      title: title.substring(0, 120),
+      price,
+      url: `https://www.amazon.co.jp/dp/${asin}`,
+      rating,
+      reviews,
+    });
+  }
+
+  return products;
+}
+
+/* ================================================================== */
+/*  Rakuten Scraper                                                    */
+/*  WARP SOCKS5 → HTML scraping with JSON-LD structured data           */
+/* ================================================================== */
+
+async function scrapeRakuten(keyword: string, limit = 8): Promise<Product[]> {
+  const path = `/search/mall/${encodeURIComponent(keyword)}/`;
+  const res = await socks5HttpsGet("search.rakuten.co.jp", path);
+
+  if (res.status !== 200 || res.data.length < 1000) return [];
+
+  const html = res.data;
+  const products: Product[] = [];
+
+  // Extract JSON-LD structured data
+  const jsonLdMatch = html.match(
+    /application\/ld\+json[^>]*>(.*?)<\/script>/s
+  );
+  if (!jsonLdMatch) return [];
+
+  try {
+    const data = JSON.parse(jsonLdMatch[1]);
+    const items = data.itemListElement || [];
+
+    for (
+      let i = 0;
+      i < items.length && products.length < limit;
+      i++
+    ) {
+      const item = items[i];
+      const prod = item.item || item;
+      const name = (prod.name || "").trim();
+      if (!name) continue;
+
+      const price = prod.offers?.price;
+      const url = (prod.url || "").split("?")[0]; // Clean tracking params
+      const rating = prod.aggregateRating?.ratingValue;
+      const reviewCount = prod.aggregateRating?.reviewCount;
+
+      products.push({
+        platform: "楽天市場",
+        title: name.substring(0, 120),
+        price: price != null ? `￥${Number(price).toLocaleString()}` : null,
+        url: url || `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(keyword)}/`,
+        rating: rating != null ? String(rating) : null,
+        reviews: reviewCount != null ? String(reviewCount) : null,
+      });
+    }
+  } catch {
+    // JSON parse failed — fall back to no results
+  }
+
+  return products;
+}
+
+/* ================================================================== */
+/*  Platform definitions (for search URL generation)                   */
+/* ================================================================== */
 
 interface ShopPlatform {
   id: string;
@@ -79,8 +314,8 @@ interface ShopPlatform {
   nameJa: string;
   icon: string;
   searchUrl: (keyword: string) => string;
-  bingSiteFilter: string;
-  category: string; // 'new' | 'used' | 'c2c' | 'general'
+  category: string;
+  scrapable: boolean;
 }
 
 const PLATFORMS: ShopPlatform[] = [
@@ -91,8 +326,8 @@ const PLATFORMS: ShopPlatform[] = [
     icon: "🛒",
     searchUrl: (kw) =>
       `https://www.amazon.co.jp/s?k=${encodeURIComponent(kw)}`,
-    bingSiteFilter: "site:amazon.co.jp",
-    category: "general",
+    category: "综合",
+    scrapable: true,
   },
   {
     id: "rakuten",
@@ -101,18 +336,8 @@ const PLATFORMS: ShopPlatform[] = [
     icon: "🏪",
     searchUrl: (kw) =>
       `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(kw)}/`,
-    bingSiteFilter: "site:item.rakuten.co.jp",
-    category: "general",
-  },
-  {
-    id: "surugaya",
-    name: "Suruga-ya",
-    nameJa: "駿河屋",
-    icon: "📦",
-    searchUrl: (kw) =>
-      `https://www.suruga-ya.jp/search?category=&search_word=${encodeURIComponent(kw)}`,
-    bingSiteFilter: "site:suruga-ya.jp",
-    category: "used",
+    category: "综合",
+    scrapable: true,
   },
   {
     id: "mercari",
@@ -121,8 +346,18 @@ const PLATFORMS: ShopPlatform[] = [
     icon: "🤝",
     searchUrl: (kw) =>
       `https://jp.mercari.com/search?keyword=${encodeURIComponent(kw)}`,
-    bingSiteFilter: "site:jp.mercari.com",
-    category: "c2c",
+    category: "个人闲置(C2C)",
+    scrapable: false,
+  },
+  {
+    id: "surugaya",
+    name: "Suruga-ya",
+    nameJa: "駿河屋",
+    icon: "📦",
+    searchUrl: (kw) =>
+      `https://www.suruga-ya.jp/search?category=&search_word=${encodeURIComponent(kw)}`,
+    category: "中古",
+    scrapable: false,
   },
   {
     id: "animate",
@@ -131,10 +366,12 @@ const PLATFORMS: ShopPlatform[] = [
     icon: "🎌",
     searchUrl: (kw) =>
       `https://www.animate-onlineshop.jp/products/list.php?mode=search&keyword=${encodeURIComponent(kw)}`,
-    bingSiteFilter: "site:animate-onlineshop.jp",
-    category: "new",
+    category: "新品(ACG)",
+    scrapable: false,
   },
 ];
+
+/* ---- Platform resolver ---- */
 
 const PLATFORM_MAP: Record<string, ShopPlatform> = {};
 for (const p of PLATFORMS) {
@@ -161,58 +398,38 @@ function resolvePlatform(input: string): ShopPlatform | null {
   return PLATFORM_MAP[key] || PLATFORM_MAP[input.trim()] || null;
 }
 
-/* ---- SearXNG search helper ---- */
+/* ---- Scrape dispatcher ---- */
 
-interface SearchResult {
-  title: string;
-  url: string;
-  snippet: string;
-}
-
-async function searxngSearch(query: string, count = 8): Promise<SearchResult[]> {
-  try {
-    const url = `http://127.0.0.1:8888/search?q=${encodeURIComponent(query)}&format=json&engines=google,bing&pageno=1`;
-    const res = await httpGet(url);
-    if (res.status !== 200) return [];
-
-    const json = JSON.parse(res.data);
-    if (!json.results || !Array.isArray(json.results)) return [];
-
-    const results: SearchResult[] = json.results
-      .slice(0, count)
-      .map((r: { title?: string; url?: string; content?: string }) => ({
-        title: (r.title || "").trim(),
-        url: (r.url || "").trim(),
-        snippet: (r.content || "").trim(),
-      }))
-      .filter((r: SearchResult) => r.title && r.url);
-
-    return results;
-  } catch {
-    return [];
+async function scrapePlatform(
+  platformId: string,
+  keyword: string,
+  limit: number
+): Promise<Product[]> {
+  switch (platformId) {
+    case "amazon_jp":
+      return scrapeAmazonJP(keyword, limit);
+    case "rakuten":
+      return scrapeRakuten(keyword, limit);
+    default:
+      return [];
   }
 }
 
-/* ---- Price extraction helper ---- */
+/* ---- Result text helper ---- */
 
-function extractPrices(text: string): string[] {
-  const patterns = [
-    /([0-9,]+)\s*円/g,
-    /¥\s*([0-9,]+)/g,
-    /JPY\s*([0-9,]+)/g,
-  ];
-  const prices: string[] = [];
-  for (const p of patterns) {
-    let m: RegExpExecArray | null;
-    while ((m = p.exec(text)) !== null) {
-      const val = m[1].replace(/,/g, "");
-      const num = parseInt(val, 10);
-      if (num >= 10 && num <= 10_000_000) {
-        prices.push(`¥${num.toLocaleString()}`);
-      }
-    }
+function text(str: string) {
+  return { content: [{ type: "text" as const, text: str }] };
+}
+
+function formatProduct(p: Product, idx: number): string {
+  let line = `${idx}. 【${p.platform}】${p.title}`;
+  if (p.price) line += `\n   价格: ${p.price}`;
+  if (p.rating) {
+    line += `  ★${p.rating}`;
+    if (p.reviews) line += `(${p.reviews}条评价)`;
   }
-  return [...new Set(prices)].slice(0, 5);
+  line += `\n   ${p.url}`;
+  return line;
 }
 
 /* ==================================================================== */
@@ -221,7 +438,7 @@ const plugin = {
   id: "jp-shopping",
   name: "JP Shopping",
   description:
-    "日本电商搜索 — Amazon JP/骏河屋/Mercari/乐天/Animate 比价查询",
+    "日本电商搜索 — Amazon JP/楽天/Mercari/駿河屋/Animate 比价查询",
 
   register(api: OpenClawPluginApi) {
     /* ================================================================ */
@@ -230,8 +447,8 @@ const plugin = {
     api.registerTool({
       name: "jp_search",
       label: "日本电商搜索",
-      description: `在日本电商平台搜索商品，返回各平台搜索链接和搜索引擎抓取到的商品摘要。
-支持平台：Amazon JP（日亚）、楽天（乐天）、駿河屋（骏河屋）、メルカリ（Mercari）、アニメイト（Animate）。
+      description: `在日本电商平台搜索商品。直接抓取 Amazon JP 和乐天的商品数据（标题、价格、链接），并提供 Mercari/骏河屋/Animate 的搜索直链。
+支持平台：Amazon JP（日亚）、楽天（乐天）、駿河屋（骏河屋）、メルカリ（Mercari/煤炉）、アニメイト（Animate）。
 
 使用场景：
 - "在日本买高达模型哪里便宜"
@@ -240,7 +457,7 @@ const plugin = {
 - "帮我搜一下日本的XX商品"
 - "日本代购XX多少钱"
 
-返回各平台的搜索直链（用户可直接点击）+ 搜索引擎搜到的商品信息和价格。`,
+关键词建议使用日文/英文，如 ガンダム、hatsune miku figure。`,
       parameters: Type.Object({
         keyword: Type.String({
           description:
@@ -249,93 +466,70 @@ const plugin = {
         platform: Type.Optional(
           Type.String({
             description:
-              "指定平台筛选（amazon/rakuten/surugaya/mercari/animate）。不指定则搜索全部5个平台",
+              "指定平台（amazon/rakuten/surugaya/mercari/animate 或中文别名）。不指定则搜索全部平台",
           })
         ),
       }),
       execute: async (_id: string, params: Record<string, unknown>) => {
         const keyword = String(params.keyword || "").trim();
-        if (!keyword) return { error: "请提供搜索关键词" };
+        if (!keyword) return text("请提供搜索关键词");
 
         /* Determine which platforms to search */
         let platforms: ShopPlatform[];
         if (params.platform) {
           const p = resolvePlatform(String(params.platform));
           if (!p)
-            return {
-              error: `未知平台 "${params.platform}"。支持：amazon/rakuten/surugaya/mercari/animate`,
-            };
+            return text(
+              `未知平台 "${params.platform}"。支持：amazon/rakuten/surugaya/mercari/animate`
+            );
           platforms = [p];
         } else {
           platforms = PLATFORMS;
         }
 
         /* Generate search URLs for all platforms */
-        const searchLinks = platforms.map((p) => ({
-          platform: `${p.icon} ${p.nameJa} (${p.name})`,
-          category:
-            p.category === "new"
-              ? "新品"
-              : p.category === "used"
-                ? "中古"
-                : p.category === "c2c"
-                  ? "个人闲置"
-                  : "综合",
-          url: p.searchUrl(keyword),
-        }));
+        const searchLinks = platforms
+          .map((p) => `${p.icon} ${p.nameJa} (${p.category}): ${p.searchUrl(keyword)}`)
+          .join("\n");
 
-        /* Use SearXNG to search for actual product data across selected platforms */
-        const searchQueries = platforms.map((p) =>
-          searxngSearch(`${keyword} ${p.bingSiteFilter}`, 4)
-        );
+        /* Scrape scrapable platforms in parallel */
+        const scrapable = platforms.filter((p) => p.scrapable);
+        let allProducts: Product[] = [];
 
-        let searchResults: { platform: string; results: SearchResult[] }[];
-        try {
-          const allResults = await Promise.all(searchQueries);
-          searchResults = platforms.map((p, i) => ({
-            platform: p.name,
-            results: allResults[i],
-          }));
-        } catch {
-          searchResults = [];
-        }
-
-        /* Format results into product summaries */
-        const productHits: any[] = [];
-        for (const br of searchResults) {
-          for (const r of br.results) {
-            // Skip non-product pages
-            if (
-              r.url.includes("/help") ||
-              r.url.includes("/about") ||
-              r.url.includes("/guide")
-            )
-              continue;
-            const prices = extractPrices(r.title + " " + r.snippet);
-            productHits.push({
-              platform: br.platform,
-              title: r.title.slice(0, 80),
-              price: prices.length > 0 ? prices[0] : null,
-              url: r.url,
-              snippet: r.snippet.slice(0, 120) || undefined,
-            });
+        if (scrapable.length > 0) {
+          const results = await Promise.allSettled(
+            scrapable.map((p) => scrapePlatform(p.id, keyword, 6))
+          );
+          for (const r of results) {
+            if (r.status === "fulfilled") {
+              allProducts = allProducts.concat(r.value);
+            }
           }
         }
 
-        // Limit total hits
-        const topHits = productHits.slice(0, 12);
+        /* Format output */
+        let output = `🔍 "${keyword}" 日本电商搜索结果\n\n`;
 
-        return {
-          keyword,
-          search_links: searchLinks,
-          product_results: topHits.length > 0 ? topHits : undefined,
-          result_count: topHits.length,
-          note:
-            topHits.length > 0
-              ? "以上为搜索引擎搜索到的商品摘要，点击搜索链接可查看完整列表"
-              : "未能通过搜索引擎搜索到具体商品信息，请点击上方搜索链接直接查看",
-          数据来源: "SearXNG",
-        };
+        if (allProducts.length > 0) {
+          output += `📦 搜索到 ${allProducts.length} 件商品:\n\n`;
+          allProducts.forEach((p, i) => {
+            output += formatProduct(p, i + 1) + "\n\n";
+          });
+        } else {
+          output += "⚠️ 未能从可抓取平台获取商品数据，请点击下方搜索链接直接查看。\n\n";
+        }
+
+        output += `🔗 各平台搜索直链:\n${searchLinks}\n\n`;
+
+        // Note which platforms have no scraping
+        const unscrape = platforms.filter((p) => !p.scrapable);
+        if (unscrape.length > 0) {
+          output += `💡 ${unscrape.map((p) => p.nameJa).join("、")} 暂不支持自动抓取，请点击链接查看。\n`;
+        }
+
+        output += "\n数据来源：Amazon.co.jp / 楽天市場（直接抓取）";
+
+        return text(output);
       },
     });
 
@@ -345,11 +539,11 @@ const plugin = {
     api.registerTool({
       name: "jp_price_compare",
       label: "日本比价",
-      description: `对比商品在多个日本电商平台的价格。通过搜索引擎搜索各平台上的价格信息。
+      description: `对比商品在 Amazon JP 和乐天市场的价格。直接抓取两大平台的商品数据进行比较，并提供其他平台搜索链接。
 
 使用场景：
 - "这个手办在日本各平台分别多少钱"
-- "对比一下骏河屋和Amazon JP上的价格"
+- "对比一下日亚和乐天上的价格"
 - "找日本最便宜的渠道买XX"`,
       parameters: Type.Object({
         keyword: Type.String({
@@ -358,56 +552,83 @@ const plugin = {
       }),
       execute: async (_id: string, params: Record<string, unknown>) => {
         const keyword = String(params.keyword || "").trim();
-        if (!keyword) return { error: "请提供商品关键词" };
+        if (!keyword) return text("请提供商品关键词");
 
-        /* Search each platform via SearXNG in parallel */
-        const searches = PLATFORMS.map(async (p) => {
-          const results = await searxngSearch(
-            `${keyword} ${p.bingSiteFilter} 円`,
-            5
-          );
-          const items: any[] = [];
-          for (const r of results) {
-            const prices = extractPrices(r.title + " " + r.snippet);
-            if (prices.length > 0 || r.title.length > 10) {
-              items.push({
-                title: r.title.slice(0, 60),
-                price: prices[0] || "价格未知",
-                url: r.url,
+        /* Scrape Amazon + Rakuten in parallel */
+        const [amazonResult, rakutenResult] = await Promise.allSettled([
+          scrapeAmazonJP(keyword, 5),
+          scrapeRakuten(keyword, 5),
+        ]);
+
+        const amazonProducts =
+          amazonResult.status === "fulfilled" ? amazonResult.value : [];
+        const rakutenProducts =
+          rakutenResult.status === "fulfilled" ? rakutenResult.value : [];
+
+        let output = `💰 "${keyword}" 日本比价结果\n\n`;
+
+        // Amazon section
+        output += `🛒 Amazon.co.jp:\n`;
+        if (amazonProducts.length > 0) {
+          for (const p of amazonProducts) {
+            const r = p.rating ? ` ★${p.rating}` : "";
+            const rv = p.reviews ? `(${p.reviews}条评价)` : "";
+            output += `  · ${p.title.substring(0, 60)}\n    ${p.price || "价格未知"}${r}${rv}\n    ${p.url}\n`;
+          }
+        } else {
+          output += `  未获取到商品数据\n`;
+        }
+
+        output += `\n🏪 楽天市場:\n`;
+        if (rakutenProducts.length > 0) {
+          for (const p of rakutenProducts) {
+            const r = p.rating ? ` ★${p.rating}` : "";
+            const rv = p.reviews ? `(${p.reviews}条评价)` : "";
+            output += `  · ${p.title.substring(0, 60)}\n    ${p.price || "价格未知"}${r}${rv}\n    ${p.url}\n`;
+          }
+        } else {
+          output += `  未获取到商品数据\n`;
+        }
+
+        // Price comparison summary
+        const allPrices: { platform: string; price: number; title: string }[] =
+          [];
+        for (const p of [...amazonProducts, ...rakutenProducts]) {
+          if (p.price) {
+            const numStr = p.price.replace(/[^\d]/g, "");
+            const num = parseInt(numStr, 10);
+            if (num > 0 && num < 10_000_000) {
+              allPrices.push({
+                platform: p.platform,
+                price: num,
+                title: p.title.substring(0, 40),
               });
             }
           }
-          return {
-            platform: `${p.icon} ${p.nameJa}`,
-            type:
-              p.category === "new"
-                ? "新品"
-                : p.category === "used"
-                  ? "中古"
-                  : p.category === "c2c"
-                    ? "个人闲置"
-                    : "综合",
-            search_url: p.searchUrl(keyword),
-            items: items.slice(0, 3),
-          };
-        });
-
-        try {
-          const comparisons = await Promise.all(searches);
-          return {
-            keyword,
-            comparison: comparisons,
-            tip: "价格仅供参考，实际以各平台页面为准。点击链接查看完整结果。",
-            数据来源: "SearXNG",
-          };
-        } catch (err) {
-          return { error: `比价查询失败: ${String(err)}` };
         }
+
+        if (allPrices.length >= 2) {
+          allPrices.sort((a, b) => a.price - b.price);
+          const cheapest = allPrices[0];
+          output += `\n📊 最低价: ￥${cheapest.price.toLocaleString()} @ ${cheapest.platform}\n`;
+          output += `   "${cheapest.title}"\n`;
+        }
+
+        // Other platform links
+        output += `\n🔗 其他平台:\n`;
+        for (const p of PLATFORMS.filter((p) => !p.scrapable)) {
+          output += `  ${p.icon} ${p.nameJa}: ${p.searchUrl(keyword)}\n`;
+        }
+
+        output += `\n💡 价格仅供参考，以各平台实际页面为准。\n`;
+        output += `数据来源：Amazon.co.jp / 楽天市場（直接抓取）`;
+
+        return text(output);
       },
     });
 
     console.log(
-      "[jp-shopping] Registered jp_search + jp_price_compare tools"
+      "[jp-shopping] Registered jp_search + jp_price_compare (v2 direct scraping)"
     );
   },
 };

@@ -150,15 +150,16 @@ class ChromaClient {
     this.collectionName = collectionName;
   }
 
+  private get v2Base(): string {
+    return `${this.baseUrl}/api/v2/tenants/default_tenant/databases/default_database`;
+  }
+
   /** Resolve collection name → collection ID (cached) */
   private async getCollectionId(): Promise<string> {
     if (this.collectionId) return this.collectionId;
 
-    // ChromaDB v2 API: GET /api/v2/tenants/default_tenant/databases/default_database/collections/{name}
-    // ChromaDB v1 API: GET /api/v1/collections?name={name}
-    // Try v2 first, fall back to v1
-    let res = await httpRequest(
-      `${this.baseUrl}/api/v2/tenants/default_tenant/databases/default_database/collections/${encodeURIComponent(this.collectionName)}`,
+    const res = await httpRequest(
+      `${this.v2Base}/collections/${encodeURIComponent(this.collectionName)}`,
       { method: "GET", headers: { "Content-Type": "application/json" } }
     );
 
@@ -168,21 +169,7 @@ class ChromaClient {
       return this.collectionId!;
     }
 
-    // Fallback: v1 list collections
-    res = await httpRequest(
-      `${this.baseUrl}/api/v1/collections?name=${encodeURIComponent(this.collectionName)}`,
-      { method: "GET", headers: { "Content-Type": "application/json" } }
-    );
-
-    if (res.status === 200) {
-      const data = JSON.parse(res.data);
-      if (Array.isArray(data) && data.length > 0) {
-        this.collectionId = data[0].id;
-        return this.collectionId!;
-      }
-    }
-
-    throw new Error(`Collection "${this.collectionName}" not found (status ${res.status})`);
+    throw new Error(`Collection "${this.collectionName}" not found (status ${res.status}): ${res.data.slice(0, 200)}`);
   }
 
   /** Query by embedding vector */
@@ -196,21 +183,11 @@ class ChromaClient {
     };
     if (whereFilter) payload.where = whereFilter;
 
-    // Try v2 API first
-    let res = await httpRequest(
-      `${this.baseUrl}/api/v2/tenants/default_tenant/databases/default_database/collections/${collId}/query`,
+    const res = await httpRequest(
+      `${this.v2Base}/collections/${collId}/query`,
       { method: "POST", headers: { "Content-Type": "application/json" } },
       JSON.stringify(payload)
     );
-
-    if (res.status !== 200) {
-      // Fallback v1
-      res = await httpRequest(
-        `${this.baseUrl}/api/v1/collections/${collId}/query`,
-        { method: "POST", headers: { "Content-Type": "application/json" } },
-        JSON.stringify(payload)
-      );
-    }
 
     if (res.status !== 200) {
       throw new Error(`ChromaDB query failed (${res.status}): ${res.data.slice(0, 200)}`);
@@ -234,12 +211,11 @@ class ChromaClient {
   /** Health check */
   async heartbeat(): Promise<{ ok: boolean; version?: string; collections?: number }> {
     try {
-      const res = await httpRequest(`${this.baseUrl}/api/v1/heartbeat`, { method: "GET" });
+      const res = await httpRequest(`${this.baseUrl}/api/v2/heartbeat`, { method: "GET" });
       if (res.status !== 200) return { ok: false };
 
-      // Also get collection count
       const listRes = await httpRequest(
-        `${this.baseUrl}/api/v2/tenants/default_tenant/databases/default_database/collections`,
+        `${this.v2Base}/collections`,
         { method: "GET", headers: { "Content-Type": "application/json" } }
       );
       let collections = 0;
@@ -248,8 +224,7 @@ class ChromaClient {
         collections = Array.isArray(arr) ? arr.length : 0;
       }
 
-      // Get version
-      const verRes = await httpRequest(`${this.baseUrl}/api/v1/version`, { method: "GET" });
+      const verRes = await httpRequest(`${this.baseUrl}/api/v2/version`, { method: "GET" });
       const version = verRes.status === 200 ? JSON.parse(verRes.data) : "unknown";
 
       return { ok: true, version: String(version), collections };
@@ -263,19 +238,11 @@ class ChromaClient {
     try {
       const collId = await this.getCollectionId();
       const res = await httpRequest(
-        `${this.baseUrl}/api/v2/tenants/default_tenant/databases/default_database/collections/${collId}/count`,
+        `${this.v2Base}/collections/${collId}/count`,
         { method: "GET" }
       );
       if (res.status === 200) {
         return { count: JSON.parse(res.data), name: this.collectionName };
-      }
-      // Fallback v1
-      const res1 = await httpRequest(
-        `${this.baseUrl}/api/v1/collections/${collId}/count`,
-        { method: "GET" }
-      );
-      if (res1.status === 200) {
-        return { count: JSON.parse(res1.data), name: this.collectionName };
       }
       return null;
     } catch {

@@ -274,7 +274,7 @@ async function searchStarWars(resource: string, query: string) {
 const DND_CATEGORIES = ["monsters", "spells", "classes", "equipment", "races", "features", "traits", "conditions", "magic-items", "weapons", "armor"];
 
 async function dndLookup(category: string, index: string) {
-  const res = await httpGet(`https://www.dnd5eapi.co/api/${encodeURIComponent(category)}/${encodeURIComponent(index.toLowerCase().replace(/\s+/g, "-"))}`);
+  const res = await httpGet(`https://www.dnd5eapi.co/api/2014/${encodeURIComponent(category)}/${encodeURIComponent(index.toLowerCase().replace(/\s+/g, "-"))}`);
   if (res.status === 404) throw new Error(`未找到 ${category}/${index}`);
   if (res.status !== 200) throw new Error(`D&D 5e API HTTP ${res.status}`);
   const data = JSON.parse(res.data);
@@ -352,7 +352,7 @@ async function dndLookup(category: string, index: string) {
 }
 
 async function dndSearch(category: string, query: string) {
-  const res = await httpGet(`https://www.dnd5eapi.co/api/${encodeURIComponent(category)}?name=${encodeURIComponent(query)}`);
+  const res = await httpGet(`https://www.dnd5eapi.co/api/2014/${encodeURIComponent(category)}?name=${encodeURIComponent(query)}`);
   if (res.status !== 200) throw new Error(`D&D 5e API HTTP ${res.status}`);
   const data = JSON.parse(res.data);
   return (data.results || []).slice(0, 10).map((r: any) => ({

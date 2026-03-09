@@ -3,6 +3,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import * as https from "node:https";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
+import * as net from "node:net";
+import * as tls from "node:tls";
 
 /* ------------------------------------------------------------------ */
 /*  Commodities & Futures Plugin                                       */
@@ -13,6 +15,54 @@ import * as zlib from "node:zlib";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const REQUEST_TIMEOUT = 20_000;
+
+/* ---- SOCKS5 proxy helper (for WARP tunnel) ---- */
+
+function socks5HttpsGet(
+  proxyHost: string, proxyPort: number,
+  targetHost: string, targetPort: number,
+  path: string, headers: Record<string, string> = {},
+  timeout = 15000
+): Promise<{ status: number; data: string }> {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(proxyPort, proxyHost, () => {
+      sock.write(Buffer.from([0x05, 0x01, 0x00]));
+    });
+    let step = 0;
+    sock.on("data", (data) => {
+      if (step === 0) {
+        if (data[0] !== 0x05 || data[1] !== 0x00) return reject(new Error("SOCKS5 auth failed"));
+        step = 1;
+        const buf = Buffer.alloc(7 + targetHost.length);
+        buf[0] = 0x05; buf[1] = 0x01; buf[2] = 0x00; buf[3] = 0x03;
+        buf[4] = targetHost.length;
+        buf.write(targetHost, 5);
+        buf.writeUInt16BE(targetPort, 5 + targetHost.length);
+        sock.write(buf);
+      } else if (step === 1) {
+        if (data[0] !== 0x05 || data[1] !== 0x00) return reject(new Error("SOCKS5 connect failed"));
+        const tlsSock = tls.connect({ socket: sock, servername: targetHost }, () => {
+          const req = https.get({
+            hostname: targetHost, path,
+            createConnection: () => tlsSock,
+            headers: { "User-Agent": USER_AGENT, ...headers },
+            timeout,
+          }, (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (c: Buffer) => chunks.push(c));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, data: Buffer.concat(chunks).toString("utf8") }));
+            res.on("error", reject);
+          });
+          req.on("error", reject);
+          req.on("timeout", () => { req.destroy(); reject(new Error("Timeout")); });
+        });
+        tlsSock.on("error", reject);
+      }
+    });
+    sock.on("error", reject);
+    sock.setTimeout(timeout, () => { sock.destroy(); reject(new Error("SOCKS5 timeout")); });
+  });
+}
 
 /* ---- HTTP helper ---- */
 
@@ -188,22 +238,61 @@ function resolveSymbol(input: string): string {
   return trimmed.toUpperCase();
 }
 
-/* ---- Yahoo Finance quote fetcher ---- */
+/* ---- Yahoo Finance quote fetcher (with SOCKS5 fallback for rate-limited IPs) ---- */
 
 async function fetchQuotes(symbols: string[]): Promise<any[]> {
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols.join(",")}`;
+  const symStr = symbols.join(",");
+  const YAHOO_HOST = "query2.finance.yahoo.com";
+
+  // Try direct v7 first
+  const url = `https://${YAHOO_HOST}/v7/finance/quote?symbols=${symStr}`;
   const res = await httpGet(url, { timeout: REQUEST_TIMEOUT });
-  if (res.status !== 200) {
-    // Try v6 fallback
-    const url6 = `https://query1.finance.yahoo.com/v6/finance/quote?symbols=${symbols.join(",")}`;
-    const res6 = await httpGet(url6, { timeout: REQUEST_TIMEOUT });
-    if (res6.status !== 200)
-      throw new Error(`Yahoo Finance 返回 HTTP ${res6.status}`);
+
+  if (res.status === 200) {
+    const data = JSON.parse(res.data);
+    return data?.quoteResponse?.result || data?.finance?.result?.[0]?.quotes || [];
+  }
+
+  // Try direct v6 fallback
+  const url6 = `https://${YAHOO_HOST}/v6/finance/quote?symbols=${symStr}`;
+  const res6 = await httpGet(url6, { timeout: REQUEST_TIMEOUT });
+
+  if (res6.status === 200) {
     const data6 = JSON.parse(res6.data);
     return data6?.quoteResponse?.result || [];
   }
-  const data = JSON.parse(res.data);
-  return data?.quoteResponse?.result || data?.finance?.result?.[0]?.quotes || [];
+
+  // Both failed (likely 429 rate-limit) — fallback through WARP SOCKS5 proxy
+  console.log(`[commodities] direct quote failed (v7=${res.status}, v6=${res6.status}), trying SOCKS5 proxy...`);
+
+  try {
+    const proxyRes = await socks5HttpsGet(
+      "127.0.0.1", 40000,
+      YAHOO_HOST, 443,
+      `/v7/finance/quote?symbols=${symStr}`,
+      { Accept: "application/json" }
+    );
+    if (proxyRes.status === 200) {
+      const data = JSON.parse(proxyRes.data);
+      return data?.quoteResponse?.result || data?.finance?.result?.[0]?.quotes || [];
+    }
+
+    // Try v6 through proxy
+    const proxyRes6 = await socks5HttpsGet(
+      "127.0.0.1", 40000,
+      YAHOO_HOST, 443,
+      `/v6/finance/quote?symbols=${symStr}`,
+      { Accept: "application/json" }
+    );
+    if (proxyRes6.status === 200) {
+      const data6 = JSON.parse(proxyRes6.data);
+      return data6?.quoteResponse?.result || [];
+    }
+
+    throw new Error(`Yahoo Finance 返回 HTTP ${proxyRes.status} (via proxy)`);
+  } catch (proxyErr) {
+    throw new Error(`Yahoo Finance quote 失败: direct v7=${res.status} v6=${res6.status}, proxy error: ${String(proxyErr)}`);
+  }
 }
 
 async function fetchChart(
@@ -211,7 +300,7 @@ async function fetchChart(
   range: string,
   interval: string
 ): Promise<any> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
   const res = await httpGet(url, { timeout: REQUEST_TIMEOUT });
   if (res.status !== 200)
     throw new Error(`Yahoo Finance Chart 返回 HTTP ${res.status}`);

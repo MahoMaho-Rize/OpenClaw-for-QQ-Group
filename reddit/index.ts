@@ -1,100 +1,73 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import * as https from "node:https";
-import * as http from "node:http";
-import * as zlib from "node:zlib";
+import * as net from "node:net";
+import * as tls from "node:tls";
 
 /* ------------------------------------------------------------------ */
 /*  Reddit Plugin                                                      */
 /*  Uses Reddit's public JSON API (no auth required)                   */
+/*  Routes through WARP SOCKS5 proxy to avoid datacenter IP blocking   */
 /* ------------------------------------------------------------------ */
 
 const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const REQUEST_TIMEOUT = 20_000;
 
-/* ---- HTTP helper ---- */
+/* ---- SOCKS5 + TLS helper (via WARP proxy) ---- */
 
-interface HttpResponse {
-  status: number;
-  data: string;
-  url: string;
+const WARP_HOST = "127.0.0.1";
+const WARP_PORT = 40000;
+
+function socks5HttpsGet(
+  targetHost: string, path: string,
+  headers: Record<string, string> = {},
+  timeout = 15000
+): Promise<{ status: number; data: string }> {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(WARP_PORT, WARP_HOST, () => {
+      sock.write(Buffer.from([0x05, 0x01, 0x00]));
+    });
+    let step = 0;
+    sock.on("data", (data) => {
+      if (step === 0) {
+        if (data[0] !== 0x05 || data[1] !== 0x00) return reject(new Error("SOCKS5 auth fail"));
+        step = 1;
+        const buf = Buffer.alloc(7 + targetHost.length);
+        buf[0] = 0x05; buf[1] = 0x01; buf[2] = 0x00; buf[3] = 0x03;
+        buf[4] = targetHost.length;
+        buf.write(targetHost, 5);
+        buf.writeUInt16BE(443, 5 + targetHost.length);
+        sock.write(buf);
+      } else if (step === 1) {
+        if (data[0] !== 0x05 || data[1] !== 0x00) return reject(new Error("SOCKS5 connect fail"));
+        const tlsSock = tls.connect({ socket: sock, servername: targetHost }, () => {
+          const req = https.get({
+            hostname: targetHost, path,
+            createConnection: () => tlsSock,
+            headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...headers },
+            timeout,
+          }, (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (c: Buffer) => chunks.push(c));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, data: Buffer.concat(chunks).toString("utf8") }));
+            res.on("error", reject);
+          });
+          req.on("error", reject);
+          req.on("timeout", () => { req.destroy(); reject(new Error("Timeout")); });
+        });
+        tlsSock.on("error", reject);
+      }
+    });
+    sock.on("error", reject);
+    sock.setTimeout(timeout, () => { sock.destroy(); reject(new Error("SOCKS5 timeout")); });
+  });
 }
 
-function httpGet(
-  url: string,
-  opts: { timeout?: number; maxRedirects?: number } = {}
-): Promise<HttpResponse> {
-  const timeout = opts.timeout ?? REQUEST_TIMEOUT;
-  const maxRedirects = opts.maxRedirects ?? 5;
+/* ---- Convenience wrapper ---- */
 
-  return new Promise((resolve, reject) => {
-    let redirectCount = 0;
-
-    function doRequest(currentUrl: string) {
-      const u = new URL(currentUrl);
-      const isHttps = u.protocol === "https:";
-      const mod = isHttps ? https : http;
-
-      const req = mod.get(
-        {
-          hostname: u.hostname,
-          path: u.pathname + u.search,
-          port: u.port || (isHttps ? 443 : 80),
-          family: 4,
-          timeout,
-          headers: {
-            "User-Agent": USER_AGENT,
-            Accept: "application/json",
-            "Accept-Encoding": "gzip, deflate",
-          },
-        },
-        (res) => {
-          if (
-            res.statusCode &&
-            res.statusCode >= 300 &&
-            res.statusCode < 400 &&
-            res.headers.location
-          ) {
-            if (++redirectCount > maxRedirects) {
-              reject(new Error(`Too many redirects (>${maxRedirects})`));
-              return;
-            }
-            const next = new URL(res.headers.location, currentUrl).href;
-            res.resume();
-            doRequest(next);
-            return;
-          }
-
-          let stream: NodeJS.ReadableStream = res;
-          const encoding = res.headers["content-encoding"];
-          if (encoding === "gzip") {
-            stream = res.pipe(zlib.createGunzip());
-          } else if (encoding === "deflate") {
-            stream = res.pipe(zlib.createInflate());
-          }
-
-          const chunks: Buffer[] = [];
-          stream.on("data", (c: Buffer) => chunks.push(c));
-          stream.on("end", () => {
-            resolve({
-              status: res.statusCode ?? 0,
-              data: Buffer.concat(chunks).toString("utf8"),
-              url: currentUrl,
-            });
-          });
-          stream.on("error", reject);
-        }
-      );
-      req.on("error", reject);
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error(`Request timeout (${timeout}ms)`));
-      });
-    }
-
-    doRequest(url);
-  });
+function redditGet(path: string): Promise<{ status: number; data: string }> {
+  return socks5HttpsGet("www.reddit.com", path, {}, REQUEST_TIMEOUT);
 }
 
 /* ---- Helpers ---- */
@@ -175,9 +148,9 @@ const plugin = {
         const time = (params.time as string) || "all";
         const count = Math.min(Math.max((params.count as number) || 10, 1), 25);
 
-        const base = subreddit
-          ? `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/search.json`
-          : `https://www.reddit.com/search.json`;
+        const basePath = subreddit
+          ? `/r/${encodeURIComponent(subreddit)}/search.json`
+          : `/search.json`;
 
         const searchParams = new URLSearchParams({
           q: query,
@@ -188,9 +161,7 @@ const plugin = {
         });
 
         try {
-          const res = await httpGet(`${base}?${searchParams}`, {
-            timeout: REQUEST_TIMEOUT,
-          });
+          const res = await redditGet(`${basePath}?${searchParams}`);
           if (res.status === 429) {
             return { error: "Reddit 速率限制，请稍后再试" };
           }
@@ -268,9 +239,9 @@ const plugin = {
         const time = (params.time as string) || "day";
         const count = Math.min(Math.max((params.count as number) || 10, 1), 25);
 
-        const base = subreddit
-          ? `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/${sort}.json`
-          : `https://www.reddit.com/${sort}.json`;
+        const basePath = subreddit
+          ? `/r/${encodeURIComponent(subreddit)}/${sort}.json`
+          : `/${sort}.json`;
 
         const searchParams = new URLSearchParams({
           limit: String(count),
@@ -278,9 +249,7 @@ const plugin = {
         });
 
         try {
-          const res = await httpGet(`${base}?${searchParams}`, {
-            timeout: REQUEST_TIMEOUT,
-          });
+          const res = await redditGet(`${basePath}?${searchParams}`);
           if (res.status === 429) {
             return { error: "Reddit 速率限制，请稍后再试" };
           }
@@ -354,25 +323,20 @@ const plugin = {
         ),
       }),
       execute: async (_id: string, params: Record<string, unknown>) => {
-        let postUrl: string;
+        let postPath: string;
 
         if (params.url) {
           let raw = (params.url as string).trim();
-          // Normalize URL
+          // Normalize URL — strip domain, keep path
+          raw = raw.replace(/^https?:\/\/(www\.|old\.|new\.|np\.)?reddit\.com/, "");
           raw = raw.replace(/\?.*$/, "");
           if (!raw.endsWith("/")) raw += "/";
-          postUrl = raw + ".json";
+          postPath = raw + ".json";
         } else if (params.subreddit && params.post_id) {
-          postUrl = `https://www.reddit.com/r/${params.subreddit}/comments/${params.post_id}/.json`;
+          postPath = `/r/${params.subreddit}/comments/${params.post_id}/.json`;
         } else {
           return { error: "需要提供 url 或 subreddit + post_id" };
         }
-
-        // Ensure it's using reddit.com domain
-        postUrl = postUrl.replace(
-          /^https?:\/\/(old|new|np)\.reddit\.com/,
-          "https://www.reddit.com"
-        );
 
         const commentCount = Math.min(
           Math.max((params.comment_count as number) || 10, 1),
@@ -380,11 +344,11 @@ const plugin = {
         );
         const sort = (params.sort as string) || "best";
 
-        const separator = postUrl.includes("?") ? "&" : "?";
-        const fetchUrl = `${postUrl}${separator}sort=${sort}&limit=${commentCount}`;
+        const separator = postPath.includes("?") ? "&" : "?";
+        const fetchPath = `${postPath}${separator}sort=${sort}&limit=${commentCount}`;
 
         try {
-          const res = await httpGet(fetchUrl, { timeout: REQUEST_TIMEOUT });
+          const res = await redditGet(fetchPath);
           if (res.status === 429) {
             return { error: "Reddit 速率限制，请稍后再试" };
           }
@@ -474,9 +438,8 @@ const plugin = {
         if (!subreddit) return { error: "需要提供 subreddit 名称" };
 
         try {
-          const res = await httpGet(
-            `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/about.json`,
-            { timeout: REQUEST_TIMEOUT }
+          const res = await redditGet(
+            `/r/${encodeURIComponent(subreddit)}/about.json`
           );
           if (res.status === 429) {
             return { error: "Reddit 速率限制，请稍后再试" };

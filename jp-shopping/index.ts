@@ -7,7 +7,7 @@ import * as zlib from "node:zlib";
 /* ------------------------------------------------------------------ */
 /*  JP Shopping Plugin — 日本电商比价搜索                                */
 /*  Amazon JP / 骏河屋 / Mercari / 乐天 / Animate                      */
-/*  Strategy: search URL generation + Bing site: scraping               */
+/*  Strategy: search URL generation + SearXNG (google,bing) scraping    */
 /* ------------------------------------------------------------------ */
 
 const REQUEST_TIMEOUT = 15_000;
@@ -161,59 +161,31 @@ function resolvePlatform(input: string): ShopPlatform | null {
   return PLATFORM_MAP[key] || PLATFORM_MAP[input.trim()] || null;
 }
 
-/* ---- Bing scraping helper ---- */
+/* ---- SearXNG search helper ---- */
 
-interface BingResult {
+interface SearchResult {
   title: string;
   url: string;
   snippet: string;
 }
 
-async function bingSearch(query: string, count = 8): Promise<BingResult[]> {
+async function searxngSearch(query: string, count = 8): Promise<SearchResult[]> {
   try {
-    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${count}&setlang=ja`;
+    const url = `http://127.0.0.1:8888/search?q=${encodeURIComponent(query)}&format=json&engines=google,bing&pageno=1`;
     const res = await httpGet(url);
     if (res.status !== 200) return [];
 
-    const html = res.data;
-    const results: BingResult[] = [];
+    const json = JSON.parse(res.data);
+    if (!json.results || !Array.isArray(json.results)) return [];
 
-    // Extract results using regex on b_algo blocks
-    // Match title links: <h2><a href="URL" ...>TITLE</a></h2>
-    const titleRegex =
-      /<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a><\/h2>/gs;
-    const snippetRegex = /<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>(.*?)<\/p>/gs;
-
-    let match: RegExpExecArray | null;
-    const titles: { url: string; title: string }[] = [];
-    while ((match = titleRegex.exec(html)) !== null) {
-      titles.push({
-        url: match[1],
-        title: match[2].replace(/<[^>]+>/g, "").trim(),
-      });
-    }
-
-    const snippets: string[] = [];
-    while ((match = snippetRegex.exec(html)) !== null) {
-      snippets.push(match[1].replace(/<[^>]+>/g, "").trim());
-    }
-
-    // Also try alternative snippet pattern
-    if (snippets.length === 0) {
-      const altSnippetRegex =
-        /<div class="b_caption"[^>]*>.*?<p>(.*?)<\/p>/gs;
-      while ((match = altSnippetRegex.exec(html)) !== null) {
-        snippets.push(match[1].replace(/<[^>]+>/g, "").trim());
-      }
-    }
-
-    for (let i = 0; i < titles.length; i++) {
-      results.push({
-        title: titles[i].title,
-        url: titles[i].url,
-        snippet: snippets[i] || "",
-      });
-    }
+    const results: SearchResult[] = json.results
+      .slice(0, count)
+      .map((r: { title?: string; url?: string; content?: string }) => ({
+        title: (r.title || "").trim(),
+        url: (r.url || "").trim(),
+        snippet: (r.content || "").trim(),
+      }))
+      .filter((r: SearchResult) => r.title && r.url);
 
     return results;
   } catch {
@@ -258,7 +230,7 @@ const plugin = {
     api.registerTool({
       name: "jp_search",
       label: "日本电商搜索",
-      description: `在日本电商平台搜索商品，返回各平台搜索链接和 Bing 抓取到的商品摘要。
+      description: `在日本电商平台搜索商品，返回各平台搜索链接和搜索引擎抓取到的商品摘要。
 支持平台：Amazon JP（日亚）、楽天（乐天）、駿河屋（骏河屋）、メルカリ（Mercari）、アニメイト（Animate）。
 
 使用场景：
@@ -268,7 +240,7 @@ const plugin = {
 - "帮我搜一下日本的XX商品"
 - "日本代购XX多少钱"
 
-返回各平台的搜索直链（用户可直接点击）+ Bing 搜到的商品信息和价格。`,
+返回各平台的搜索直链（用户可直接点击）+ 搜索引擎搜到的商品信息和价格。`,
       parameters: Type.Object({
         keyword: Type.String({
           description:
@@ -312,25 +284,25 @@ const plugin = {
           url: p.searchUrl(keyword),
         }));
 
-        /* Use Bing to search for actual product data across selected platforms */
-        const bingQueries = platforms.map((p) =>
-          bingSearch(`${keyword} ${p.bingSiteFilter}`, 4)
+        /* Use SearXNG to search for actual product data across selected platforms */
+        const searchQueries = platforms.map((p) =>
+          searxngSearch(`${keyword} ${p.bingSiteFilter}`, 4)
         );
 
-        let bingResults: { platform: string; results: BingResult[] }[];
+        let searchResults: { platform: string; results: SearchResult[] }[];
         try {
-          const allResults = await Promise.all(bingQueries);
-          bingResults = platforms.map((p, i) => ({
+          const allResults = await Promise.all(searchQueries);
+          searchResults = platforms.map((p, i) => ({
             platform: p.name,
             results: allResults[i],
           }));
         } catch {
-          bingResults = [];
+          searchResults = [];
         }
 
-        /* Format Bing results into product summaries */
+        /* Format results into product summaries */
         const productHits: any[] = [];
-        for (const br of bingResults) {
+        for (const br of searchResults) {
           for (const r of br.results) {
             // Skip non-product pages
             if (
@@ -360,9 +332,9 @@ const plugin = {
           result_count: topHits.length,
           note:
             topHits.length > 0
-              ? "以上为 Bing 搜索到的商品摘要，点击搜索链接可查看完整列表"
-              : "未能通过 Bing 搜索到具体商品信息，请点击上方搜索链接直接查看",
-          数据来源: "Bing",
+              ? "以上为搜索引擎搜索到的商品摘要，点击搜索链接可查看完整列表"
+              : "未能通过搜索引擎搜索到具体商品信息，请点击上方搜索链接直接查看",
+          数据来源: "SearXNG",
         };
       },
     });
@@ -373,7 +345,7 @@ const plugin = {
     api.registerTool({
       name: "jp_price_compare",
       label: "日本比价",
-      description: `对比商品在多个日本电商平台的价格。通过 Bing 搜索各平台上的价格信息。
+      description: `对比商品在多个日本电商平台的价格。通过搜索引擎搜索各平台上的价格信息。
 
 使用场景：
 - "这个手办在日本各平台分别多少钱"
@@ -388,9 +360,9 @@ const plugin = {
         const keyword = String(params.keyword || "").trim();
         if (!keyword) return { error: "请提供商品关键词" };
 
-        /* Search each platform via Bing in parallel */
+        /* Search each platform via SearXNG in parallel */
         const searches = PLATFORMS.map(async (p) => {
-          const results = await bingSearch(
+          const results = await searxngSearch(
             `${keyword} ${p.bingSiteFilter} 円`,
             5
           );
@@ -426,7 +398,7 @@ const plugin = {
             keyword,
             comparison: comparisons,
             tip: "价格仅供参考，实际以各平台页面为准。点击链接查看完整结果。",
-            数据来源: "Bing",
+            数据来源: "SearXNG",
           };
         } catch (err) {
           return { error: `比价查询失败: ${String(err)}` };

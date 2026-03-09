@@ -1,3 +1,4 @@
+// OpenClaw Bing Search Plugin
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import * as https from "node:https";

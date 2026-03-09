@@ -98,7 +98,7 @@
       "wsUrl": "ws://127.0.0.1:3001",
       "accessToken": "YOUR_ACCESS_TOKEN",
       "requireMention": true,
-      "admins": "REDACTED_ADMIN_QQ",
+      "admins": "UR_ID",
       "allowedGroups": "YOUR_QQ_GROUP_IDS",
       "adminOnlyChat": false,
       "formatMarkdown": true,
@@ -253,7 +253,7 @@
         "resolvedName": "@openclaw/feishu",
         "resolvedVersion": "2026.3.2",
         "resolvedSpec": "@openclaw/feishu@2026.3.2",
-        "integrity": "sha512-CpwjmLCS8gpZ5fFCRiEA+1i/L+E73Vhz5//TiwQjWJOtVPZEu44db294g3HUR6nB5L0IEpZgKU/JU69HgYl77w==",
+        "integrity": "UR-TOKEN",
         "shasum": "ad77e27633b480f5c815e1922252a2f07c1765bd",
         "resolvedAt": "2026-03-05T11:48:26.864Z",
         "installedAt": "2026-03-05T11:48:32.624Z"

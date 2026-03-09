@@ -12,9 +12,17 @@
         "type": "string",
         "description": "Embedding model name (default: BAAI/bge-m3)"
       },
+      "chromaUrl": {
+        "type": "string",
+        "description": "ChromaDB HTTP server URL (default: http://127.0.0.1:8100)"
+      },
+      "chromaCollection": {
+        "type": "string",
+        "description": "ChromaDB collection name (default: moegirl_wiki)"
+      },
       "dataDir": {
         "type": "string",
-        "description": "Data directory for vector storage (default: auto)"
+        "description": "Data directory for logs (default: auto)"
       }
     }
   }

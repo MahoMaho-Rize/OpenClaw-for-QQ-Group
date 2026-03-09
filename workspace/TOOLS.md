@@ -20,9 +20,6 @@
 ├─ 提到「汇率/外币/换算/美元/欧元/日元/英镑」（不涉及股票）
 │  → exchange_rate
 │
-├─ 提到「期货/大宗商品/黄金/金价/原油/油价/白银/天然气/铜价/玉米/大豆/小麦/棉花/咖啡」
-│  → 进入 [期货/大宗商品]
-│
 ├─ 提到「比特币/BTC/ETH/加密货币/币价/crypto」
 │  → crypto_price
 │
@@ -63,7 +60,7 @@
 │  → fandom
 │
 ├─ 想要「二次元图片/角色图/ACG图」
-│  → image_search (source=danbooru; 真实照片用 web_search)
+│  → image_search (source=danbooru; 真实照片用 searxng)
 │
 ├─ 提到「豆瓣/电影推荐/书评/评分」
 │  → douban_search
@@ -153,7 +150,7 @@
 │  → 进入 [电竞]
 │
 ├─ 以上都不匹配 / 需要搜索互联网
-│  → web_search (SearXNG 元搜索)
+│  → searxng (SearXNG 元搜索)
 │
 └─ 给了一张图让你找来源
    → yandex (以图搜图)
@@ -204,29 +201,6 @@
 - 用户说"汇率"→ `exchange_rate`（不是 akshare）
 - 用户说"比特币"→ `crypto_price`（不是 akshare）
 - 用户说"美股/港股"→ 用 `stock_quote` / `stock_chart`（Yahoo Finance），不是 akshare
-
-### [期货/大宗商品]
-
-全球大宗商品期货实时行情（CME/NYMEX/CBOT）。
-支持中文名称自动映射（黄金→GC=F、原油→CL=F 等）。
-
-```
-├─ "黄金/原油/白银多少钱 / 某商品价格"
-│  → commodity_price (传名称如 黄金 或代码 GC=F，支持多个逗号分隔)
-│
-├─ "大宗商品行情 / 期货市场怎么样 / 金价油价"
-│  → commodity_overview (category: all/metals/energy/agriculture)
-│
-└─ "黄金走势 / 原油K线 / 某商品历史"
-   → commodity_chart (name + range: 1d/1mo/1y)
-```
-
-**⚠ 关键区分**：
-- 大宗商品期货（黄金、原油、农产品等）→ commodity_* 系列
-- 美股/港股个股 → stock_quote / stock_chart
-- A股 → akshare_* 系列
-- 汇率 → exchange_rate
-- 加密货币 → crypto_price
 
 ### [美股/港股/全球市场]
 
@@ -309,7 +283,7 @@ Yahoo Finance 全球股票行情（美股、港股、日股、欧洲、全球指
 - 中文地名需要先用 transit_search 或让 transit_route 自动 geocode
 - 日本站名建议用日文/英文（如 Shinjuku, 新宿）
 - 中国高铁/公交覆盖较弱（Transitous主要覆盖日本、欧洲、北美）
-- 如果查不到路线，用 `web_search` 兜底搜索
+- 如果查不到路线，用 `searxng` 兜底搜索
 
 ### [五大联赛]
 
@@ -450,7 +424,7 @@ GitHub 仓库搜索、项目详情、Issues、用户、趋势。
 
 **⚠ 注意**：
 - Liquipedia 需要指定游戏：`counterstrike`、`valorant`、`dota2`、`leagueoflegends`
-- HLTV 工具如果返回错误，改用 `liquipedia_search` + `web_search` 组合兜底
+- HLTV 工具如果返回错误，改用 `liquipedia_search` + `searxng` 组合兜底
 - 用户说"电竞"但没指定游戏 → 根据上下文判断，不确定时问用户
 
 ### [航空]
@@ -468,10 +442,10 @@ GitHub 仓库搜索、项目详情、Issues、用户、趋势。
 |---------|-----------|-----------|------|
 | "美元兑人民币多少" | akshare_* | exchange_rate | 汇率不是A股 |
 | "比特币现在多少" | akshare_* | crypto_price | 加密货币不是A股 |
-| "帮我搜个论文" | web_search | arxiv/scholar/pubmed | 有专用学术工具 |
-| "这个角色是谁"(二次元) | web_search | moegirl 或 bangumi | ACG角色用ACG百科 |
-| "茅台股票怎么样" | web_search | akshare_stock_info | 个股信息有专用工具 |
-| "给我来张灵梦的图" | web_search | image_search(danbooru) | 二次元角色图用danbooru |
+| "帮我搜个论文" | searxng | arxiv/scholar/pubmed | 有专用学术工具 |
+| "这个角色是谁"(二次元) | searxng | moegirl 或 bangumi | ACG角色用ACG百科 |
+| "茅台股票怎么样" | searxng | akshare_stock_info | 个股信息有专用工具 |
+| "给我来张灵梦的图" | searxng | image_search(danbooru) | 二次元角色图用danbooru |
 | "今天A股怎么样" | exchange_rate | akshare_stock_spot | 大盘行情用akshare |
 | "美股特斯拉" | akshare_* | stock_quote(TSLA) | akshare只支持A股，美股用Yahoo Finance |
 | "港股腾讯" | akshare_* | stock_quote(0700.HK) | 港股用Yahoo Finance |
@@ -479,11 +453,11 @@ GitHub 仓库搜索、项目详情、Issues、用户、趋势。
 | "恒生指数" | akshare_* | stock_quote(^HSI) | 港股指数用Yahoo Finance |
 | "东方project角色" | moegirl | thbwiki | 东方专用wiki更准 |
 | "高达设定" | moegirl | fandom | 高达用fandom wiki |
-| "东京到大阪怎么走" | web_search | transit_route | 公交出行有专用工具 |
-| "新宿站时刻表" | web_search | transit_departures | 车站时刻表有专用工具 |
-| "英超积分榜" | web_search | football_standings | 五大联赛有专用工具 |
-| "今天NBA比分" | web_search | nba_scores | NBA有专用工具 |
-| "大谷翔平数据" | web_search | mlb_player | MLB有专用工具 |
+| "东京到大阪怎么走" | searxng | transit_route | 公交出行有专用工具 |
+| "新宿站时刻表" | searxng | transit_departures | 车站时刻表有专用工具 |
+| "英超积分榜" | searxng | football_standings | 五大联赛有专用工具 |
+| "今天NBA比分" | searxng | nba_scores | NBA有专用工具 |
+| "大谷翔平数据" | searxng | mlb_player | MLB有专用工具 |
 | "足球比赛"(没说联赛) | football_standings | football_scores(epl) | 默认英超 |
 | "转会消息/谁要签约" | web_search | football_transfer_news | 转会流言有专用工具 |
 | "日本买手办" | web_search | jp_search | 日本电商有专用工具 |
@@ -517,6 +491,6 @@ GitHub 仓库搜索、项目详情、Issues、用户、趋势。
 ## 兜底策略
 
 如果决策树里找不到匹配的分支：
-1. 先想想是不是可以用 `web_search`（SearXNG）搜索解决
+1. 先想想是不是可以用 `searxng`（SearXNG 元搜索）搜索解决
 2. 如果用户给了 URL → `url_reader`
 3. 如果纯粹闲聊/观点/情感 → **不需要任何工具**，直接回复

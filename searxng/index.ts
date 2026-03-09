@@ -203,7 +203,7 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     api.registerTool({
-      name: "web_search",
+      name: "searxng",
       label: "网页搜索",
       description: `【默认搜索工具】SearXNG 元搜索引擎，聚合 Google、Bing、DuckDuckGo、Wikipedia 等多个搜索引擎结果。
 支持三种操作：

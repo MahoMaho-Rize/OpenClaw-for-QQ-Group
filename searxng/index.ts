@@ -454,7 +454,7 @@ const plugin = {
     });
 
     console.log(
-      "[searxng] Registered web_search tool (SearXNG meta search, default)"
+      "[searxng] Registered searxng tool (SearXNG meta search, default)"
     );
   },
 };

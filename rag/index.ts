@@ -14,7 +14,7 @@ interface DocChunk {
   docId: string;        // parent document id
   text: string;         // chunk text content
   embedding: number[];  // vector embedding
-  metadata: Record<string, string>; // arbitrary metadata (title, source, tags, ...)
+  metadata: Record<string, string>;
   createdAt: string;    // ISO timestamp
 }
 
@@ -32,8 +32,35 @@ interface DocInfo {
   metadata: Record<string, string>;
 }
 
-const DEFAULT_CHUNK_SIZE = 512;    // chars per chunk
-const DEFAULT_CHUNK_OVERLAP = 64;  // overlap between chunks
+/** Query log entry — written per rag_search call */
+interface QueryLogEntry {
+  ts: string;           // ISO timestamp
+  queryId: string;      // unique id for feedback linking
+  query: string;        // user's search query
+  topK: number;
+  tag?: string;
+  results: {
+    docId: string;
+    chunkId: string;
+    score: number;
+    title: string;
+    textPreview: string; // first 120 chars
+  }[];
+  latencyMs: number;
+  feedback?: FeedbackEntry; // filled in later by rag_feedback
+}
+
+/** Feedback entry — linked to a queryId */
+interface FeedbackEntry {
+  ts: string;
+  queryId: string;
+  rating: "good" | "bad" | "partial";
+  comment?: string;     // user's optional comment
+  expectedDocId?: string; // what the user actually wanted
+}
+
+const DEFAULT_CHUNK_SIZE = 512;
+const DEFAULT_CHUNK_OVERLAP = 64;
 const DEFAULT_TOP_K = 5;
 const DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3";
 const DEFAULT_EMBEDDING_DIM = 1024;
@@ -43,7 +70,6 @@ const EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings";
 // §1  Embedding Provider (SiliconFlow)
 // ============================================================
 
-/** IPv4-only HTTPS request helper (same pattern as other plugins) */
 function httpsRequest(
   url: string,
   options: https.RequestOptions,
@@ -79,7 +105,6 @@ async function getEmbeddings(
   apiKey: string,
   model: string = DEFAULT_EMBEDDING_MODEL
 ): Promise<number[][]> {
-  // SiliconFlow embedding API is OpenAI-compatible
   const body = JSON.stringify({
     model,
     input: texts,
@@ -98,13 +123,11 @@ async function getEmbeddings(
   }
 
   const json = JSON.parse(res.data);
-  // Sort by index to guarantee order
   const sorted = (json.data as { index: number; embedding: number[] }[])
     .sort((a, b) => a.index - b.index);
   return sorted.map((d) => d.embedding);
 }
 
-/** Embed a single text */
 async function getEmbedding(
   text: string,
   apiKey: string,
@@ -115,7 +138,7 @@ async function getEmbedding(
 }
 
 // ============================================================
-// §2  Vector Store (JSONL file-backed + cosine search)
+// §2  Vector Store (JSONL file-backed + cosine search + hot reload)
 // ============================================================
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -133,65 +156,87 @@ class VectorStore {
   private chunks: DocChunk[] = [];
   private filePath: string;
   private dirty = false;
+  private lastMtimeMs = 0;  // for hot reload detection
 
   constructor(filePath: string) {
     this.filePath = filePath;
     this.load();
   }
 
-  /** Load from JSONL file */
+  /** Load from JSONL — also records file mtime for hot reload */
   private load(): void {
-    if (!fs.existsSync(this.filePath)) return;
-    const content = fs.readFileSync(this.filePath, "utf-8");
     this.chunks = [];
+    if (!fs.existsSync(this.filePath)) { this.lastMtimeMs = 0; return; }
+    const stat = fs.statSync(this.filePath);
+    this.lastMtimeMs = stat.mtimeMs;
+    const content = fs.readFileSync(this.filePath, "utf-8");
     for (const line of content.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
         this.chunks.push(JSON.parse(trimmed) as DocChunk);
-      } catch {
-        // skip corrupted lines
-      }
+      } catch { /* skip corrupted */ }
     }
   }
 
-  /** Persist to JSONL file */
+  /**
+   * Hot reload: re-read JSONL only if file was modified externally.
+   * Called before every search so we always use the freshest data.
+   * Cost: one stat() per search — negligible.
+   */
+  reloadIfChanged(): boolean {
+    if (!fs.existsSync(this.filePath)) return false;
+    const stat = fs.statSync(this.filePath);
+    if (stat.mtimeMs !== this.lastMtimeMs) {
+      const prevSize = this.chunks.length;
+      this.load();
+      this.dirty = false;
+      return this.chunks.length !== prevSize;
+    }
+    return false;
+  }
+
+  /** Force full reload (e.g. after external push of rebuilt vectors.jsonl) */
+  forceReload(): number {
+    const prevSize = this.chunks.length;
+    this.load();
+    this.dirty = false;
+    return this.chunks.length;
+  }
+
   flush(): void {
     if (!this.dirty) return;
     const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const lines = this.chunks.map((c) => JSON.stringify(c)).join("\n") + "\n";
     fs.writeFileSync(this.filePath, lines, "utf-8");
+    this.lastMtimeMs = fs.statSync(this.filePath).mtimeMs;
     this.dirty = false;
   }
 
-  /** Add chunks (batch) */
   addChunks(chunks: DocChunk[]): void {
     this.chunks.push(...chunks);
     this.dirty = true;
   }
 
-  /** Search by query embedding, return top-k results */
   search(queryEmbedding: number[], topK: number = DEFAULT_TOP_K, filter?: Record<string, string>): SearchResult[] {
-    let candidates = this.chunks;
+    // Hot reload check — pick up externally pushed vector updates
+    this.reloadIfChanged();
 
-    // Optional metadata filter
+    let candidates = this.chunks;
     if (filter) {
       candidates = candidates.filter((c) =>
         Object.entries(filter).every(([k, v]) => c.metadata[k] === v)
       );
     }
-
     const scored: SearchResult[] = candidates.map((chunk) => ({
       chunk,
       score: cosineSimilarity(queryEmbedding, chunk.embedding),
     }));
-
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, topK);
   }
 
-  /** Delete all chunks belonging to a docId */
   deleteDoc(docId: string): number {
     const before = this.chunks.length;
     this.chunks = this.chunks.filter((c) => c.docId !== docId);
@@ -200,7 +245,6 @@ class VectorStore {
     return removed;
   }
 
-  /** List all unique documents */
   listDocs(): DocInfo[] {
     const map = new Map<string, { chunks: DocChunk[]; earliest: string }>();
     for (const c of this.chunks) {
@@ -227,14 +271,83 @@ class VectorStore {
     return docs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  /** Get total chunk count */
-  get size(): number {
-    return this.chunks.length;
-  }
+  get size(): number { return this.chunks.length; }
 }
 
 // ============================================================
-// §3  Document Processor (chunking)
+// §3  Query Logger (JSONL append-only log for offline evaluation)
+// ============================================================
+
+class QueryLogger {
+  private logPath: string;
+  private feedbackPath: string;
+
+  /** In-memory ring of recent queryIds for feedback linking */
+  private recentQueries: { queryId: string; query: string; ts: number }[] = [];
+  private static MAX_RECENT = 50;
+
+  constructor(dataDir: string) {
+    const logDir = path.join(dataDir, "logs");
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    this.logPath = path.join(logDir, "queries.jsonl");
+    this.feedbackPath = path.join(logDir, "feedback.jsonl");
+  }
+
+  /** Log a search query + results. Returns queryId for feedback linking. */
+  logQuery(entry: QueryLogEntry): void {
+    const line = JSON.stringify(entry) + "\n";
+    fs.appendFileSync(this.logPath, line, "utf-8");
+    this.recentQueries.push({ queryId: entry.queryId, query: entry.query, ts: Date.now() });
+    if (this.recentQueries.length > QueryLogger.MAX_RECENT) {
+      this.recentQueries.shift();
+    }
+  }
+
+  /** Log user feedback, linked to a queryId. */
+  logFeedback(entry: FeedbackEntry): void {
+    const line = JSON.stringify(entry) + "\n";
+    fs.appendFileSync(this.feedbackPath, line, "utf-8");
+  }
+
+  /** Get the most recent queryId (for implicit feedback linking) */
+  getLastQueryId(): string | null {
+    const last = this.recentQueries[this.recentQueries.length - 1];
+    return last?.queryId ?? null;
+  }
+
+  /** Get recent queries for display */
+  getRecentQueries(n: number = 5): { queryId: string; query: string }[] {
+    return this.recentQueries.slice(-n).reverse();
+  }
+
+  /** Get log stats */
+  getStats(): { queryCount: number; feedbackCount: number; logSize: string; feedbackSize: string } {
+    const count = (p: string) => {
+      if (!fs.existsSync(p)) return 0;
+      const content = fs.readFileSync(p, "utf-8");
+      return content.split("\n").filter((l) => l.trim()).length;
+    };
+    const size = (p: string) => {
+      if (!fs.existsSync(p)) return "0 KB";
+      const s = fs.statSync(p).size;
+      return s > 1024 * 1024 ? `${(s / 1024 / 1024).toFixed(1)} MB` : `${(s / 1024).toFixed(1)} KB`;
+    };
+    return {
+      queryCount: count(this.logPath),
+      feedbackCount: count(this.feedbackPath),
+      logSize: size(this.logPath),
+      feedbackSize: size(this.feedbackPath),
+    };
+  }
+}
+
+/** Generate a short unique queryId */
+function genQueryId(): string {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+}
+
+// ============================================================
+// §4  Document Processor (chunking)
 // ============================================================
 
 function chunkText(
@@ -242,10 +355,7 @@ function chunkText(
   chunkSize: number = DEFAULT_CHUNK_SIZE,
   overlap: number = DEFAULT_CHUNK_OVERLAP
 ): string[] {
-  // Strategy: split by double-newline (paragraphs) first, then merge small
-  // paragraphs into chunks up to chunkSize, with overlap.
   const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-
   const chunks: string[] = [];
   let current = "";
 
@@ -254,7 +364,6 @@ function chunkText(
       current = current ? current + "\n\n" + para : para;
     } else {
       if (current) chunks.push(current);
-      // If a single paragraph exceeds chunkSize, split by sentences
       if (para.length > chunkSize) {
         const sentences = splitSentences(para);
         let buf = "";
@@ -266,8 +375,7 @@ function chunkText(
             buf = s.length > chunkSize ? s.slice(0, chunkSize) : s;
           }
         }
-        if (buf) current = buf;
-        else current = "";
+        if (buf) current = buf; else current = "";
       } else {
         current = para;
       }
@@ -275,7 +383,6 @@ function chunkText(
   }
   if (current) chunks.push(current);
 
-  // Apply overlap: prepend tail of previous chunk to next chunk
   if (overlap > 0 && chunks.length > 1) {
     const overlapped: string[] = [chunks[0]];
     for (let i = 1; i < chunks.length; i++) {
@@ -285,29 +392,24 @@ function chunkText(
     }
     return overlapped;
   }
-
   return chunks;
 }
 
 function splitSentences(text: string): string[] {
-  // Split on Chinese/Japanese/English sentence boundaries
   return text
     .split(/(?<=[。！？；\.\!\?\;])\s*/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
 
-/** Generate a short deterministic docId from title + timestamp */
 function generateDocId(title: string): string {
   const ts = Date.now().toString(36);
-  const slug = title
-    .replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "")
-    .slice(0, 20);
+  const slug = title.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "").slice(0, 20);
   return `${slug}-${ts}`;
 }
 
 // ============================================================
-// §4  Helper: text() response wrapper
+// §5  Helper
 // ============================================================
 
 function text(str: string) {
@@ -315,26 +417,28 @@ function text(str: string) {
 }
 
 // ============================================================
-// §5  Plugin Entry
+// §6  Plugin Entry
 // ============================================================
 
 export default {
   id: "rag",
   name: "RAG Knowledge Base",
-  description: "向量知识库：文档入库、语义检索、知识管理",
+  description: "向量知识库：文档入库、语义检索、知识管理、查询日志与反馈闭环",
 
   register(api: OpenClawPluginApi) {
-    const apiKey = (api.pluginConfig as Record<string, unknown>)?.siliconflowApiKey as string || "";
-    const embeddingModel = ((api.pluginConfig as Record<string, unknown>)?.embeddingModel as string) || DEFAULT_EMBEDDING_MODEL;
-    const dataDir = ((api.pluginConfig as Record<string, unknown>)?.dataDir as string) || path.join(process.env.HOME || "/tmp", ".openclaw", "extensions", "rag", "data");
+    const cfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
+    const apiKey = (cfg.siliconflowApiKey as string) || "";
+    const embeddingModel = (cfg.embeddingModel as string) || DEFAULT_EMBEDDING_MODEL;
+    const dataDir = (cfg.dataDir as string) ||
+      path.join(process.env.HOME || "/tmp", ".openclaw", "extensions", "rag", "data");
 
-    // Ensure data directory exists
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
     const store = new VectorStore(path.join(dataDir, "vectors.jsonl"));
+    const logger = new QueryLogger(dataDir);
 
     // ----------------------------------------------------------
-    // Tool: rag_search  —  语义搜索知识库
+    // Tool: rag_search  —  语义搜索知识库（带日志）
     // ----------------------------------------------------------
     api.registerTool({
       name: "rag_search",
@@ -351,14 +455,34 @@ export default {
         const query = params.query as string;
         const topK = (params.top_k as number) || DEFAULT_TOP_K;
         const tag = params.tag as string | undefined;
+        const queryId = genQueryId();
+        const t0 = Date.now();
 
         try {
           const queryEmb = await getEmbedding(query, apiKey, embeddingModel);
           const filter = tag ? { tag } : undefined;
           const results = store.search(queryEmb, topK, filter);
+          const latencyMs = Date.now() - t0;
+
+          // --- Log query + results ---
+          logger.logQuery({
+            ts: new Date().toISOString(),
+            queryId,
+            query,
+            topK,
+            tag,
+            results: results.map((r) => ({
+              docId: r.chunk.docId,
+              chunkId: r.chunk.id,
+              score: Math.round(r.score * 10000) / 10000,
+              title: r.chunk.metadata.title || "",
+              textPreview: r.chunk.text.slice(0, 120),
+            })),
+            latencyMs,
+          });
 
           if (results.length === 0) {
-            return text("知识库中未找到相关内容。");
+            return text(`知识库中未找到相关内容。\n[queryId: ${queryId}]`);
           }
 
           const lines = results.map((r, i) => {
@@ -370,10 +494,53 @@ export default {
             return `${header}\n${info ? info + "\n" : ""}${r.chunk.text}`;
           });
 
-          return text(lines.join("\n\n---\n\n"));
+          return text(
+            lines.join("\n\n---\n\n") +
+            `\n\n[queryId: ${queryId} | ${latencyMs}ms | ${results.length} hits]`
+          );
         } catch (e: any) {
           return text(`❌ 搜索失败: ${e.message}`);
         }
+      },
+    });
+
+    // ----------------------------------------------------------
+    // Tool: rag_feedback  —  用户对检索结果的反馈
+    // ----------------------------------------------------------
+    api.registerTool({
+      name: "rag_feedback",
+      label: "知识库反馈",
+      description: "记录用户对知识库检索结果的反馈。当用户表示检索结果好/不好/部分有用时调用。用于持续优化检索质量。",
+      parameters: Type.Object({
+        rating: Type.Union([
+          Type.Literal("good"),
+          Type.Literal("bad"),
+          Type.Literal("partial"),
+        ], { description: "评价：good=有用, bad=没用, partial=部分有用" }),
+        comment: Type.Optional(Type.String({ description: "用户的具体反馈内容" })),
+        query_id: Type.Optional(Type.String({ description: "关联的queryId（如不提供则关联最近一次查询）" })),
+      }),
+      execute: async (_id: string, params: Record<string, unknown>) => {
+        const rating = params.rating as "good" | "bad" | "partial";
+        const comment = params.comment as string | undefined;
+        let queryId = params.query_id as string | undefined;
+
+        if (!queryId) {
+          queryId = logger.getLastQueryId() ?? undefined;
+        }
+        if (!queryId) {
+          return text("❌ 没有最近的查询可以关联反馈");
+        }
+
+        logger.logFeedback({
+          ts: new Date().toISOString(),
+          queryId,
+          rating,
+          comment,
+        });
+
+        const ratingLabel = { good: "👍 有用", bad: "👎 没用", partial: "🤔 部分有用" }[rating];
+        return text(`✅ 反馈已记录\n评价: ${ratingLabel}\nqueryId: ${queryId}${comment ? "\n备注: " + comment : ""}`);
       },
     });
 
@@ -407,18 +574,16 @@ export default {
         try {
           const docId = generateDocId(title);
           const textChunks = chunkText(content, chunkSize, DEFAULT_CHUNK_OVERLAP);
-
-          // Batch embed (SiliconFlow supports batch)
           const embeddings = await getEmbeddings(textChunks, apiKey, embeddingModel);
           const now = new Date().toISOString();
           const metadata: Record<string, string> = { title };
           if (source) metadata.source = source;
           if (tag) metadata.tag = tag;
 
-          const docChunks: DocChunk[] = textChunks.map((text, i) => ({
+          const docChunks: DocChunk[] = textChunks.map((t, i) => ({
             id: `${docId}#${i}`,
             docId,
-            text,
+            text: t,
             embedding: embeddings[i],
             metadata: { ...metadata },
             createdAt: now,
@@ -451,9 +616,7 @@ export default {
       parameters: Type.Object({}),
       execute: async (_id: string, _params: Record<string, unknown>) => {
         const docs = store.listDocs();
-        if (docs.length === 0) {
-          return text("知识库为空，暂无文档。");
-        }
+        if (docs.length === 0) return text("知识库为空，暂无文档。");
 
         const lines = docs.map((d, i) => {
           const parts = [
@@ -466,10 +629,7 @@ export default {
           return parts.join("\n");
         });
 
-        return text(
-          `📚 知识库文档列表 (${docs.length} 篇, ${store.size} chunks)\n\n` +
-          lines.join("\n\n")
-        );
+        return text(`📚 知识库文档列表 (${docs.length} 篇, ${store.size} chunks)\n\n` + lines.join("\n\n"));
       },
     });
 
@@ -486,31 +646,43 @@ export default {
       execute: async (_id: string, params: Record<string, unknown>) => {
         const docId = params.doc_id as string;
         const removed = store.deleteDoc(docId);
-
-        if (removed === 0) {
-          return text(`❌ 未找到文档 ${docId}`);
-        }
-
+        if (removed === 0) return text(`❌ 未找到文档 ${docId}`);
         store.flush();
+        return text(`✅ 已删除文档 ${docId}\n移除分块: ${removed}\n知识库剩余: ${store.size} chunks`);
+      },
+    });
+
+    // ----------------------------------------------------------
+    // Tool: rag_reload  —  热加载向量库
+    // ----------------------------------------------------------
+    api.registerTool({
+      name: "rag_reload",
+      label: "知识库热加载",
+      description: "强制重新加载向量数据库文件。当外部推送了新的 vectors.jsonl 后调用，无需重启网关。",
+      parameters: Type.Object({}),
+      execute: async (_id: string, _params: Record<string, unknown>) => {
+        const newSize = store.forceReload();
+        const docs = store.listDocs();
         return text(
-          `✅ 已删除文档 ${docId}\n` +
-          `移除分块: ${removed}\n` +
-          `知识库剩余: ${store.size} chunks`
+          `✅ 热加载完成\n` +
+          `加载分块: ${newSize}\n` +
+          `文档数: ${docs.length}`
         );
       },
     });
 
     // ----------------------------------------------------------
-    // Tool: rag_stats  —  知识库统计
+    // Tool: rag_stats  —  知识库 + 日志统计
     // ----------------------------------------------------------
     api.registerTool({
       name: "rag_stats",
       label: "知识库统计",
-      description: "显示知识库的详细统计信息：文档数、分块数、存储大小、标签分布等。",
+      description: "显示知识库的详细统计信息：文档数、分块数、存储大小、标签分布、查询日志统计等。",
       parameters: Type.Object({}),
       execute: async (_id: string, _params: Record<string, unknown>) => {
         const docs = store.listDocs();
         const totalChunks = store.size;
+        const logStats = logger.getStats();
 
         // Tag distribution
         const tagCounts = new Map<string, number>();
@@ -519,7 +691,7 @@ export default {
           tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
         }
 
-        // Storage size
+        // Vector store file size
         const storePath = path.join(dataDir, "vectors.jsonl");
         let fileSize = "N/A";
         if (fs.existsSync(storePath)) {
@@ -534,14 +706,24 @@ export default {
           .map(([tag, count]) => `  ${tag}: ${count} 篇`)
           .join("\n");
 
+        // Feedback rate
+        const fbRate = logStats.queryCount > 0
+          ? `${((logStats.feedbackCount / logStats.queryCount) * 100).toFixed(0)}%`
+          : "N/A";
+
         return text(
           `📊 知识库统计\n` +
           `文档数: ${docs.length}\n` +
           `总分块: ${totalChunks}\n` +
-          `存储大小: ${fileSize}\n` +
+          `向量文件: ${fileSize}\n` +
           `嵌入模型: ${embeddingModel}\n` +
           `向量维度: ${DEFAULT_EMBEDDING_DIM}\n\n` +
-          `标签分布:\n${tagLines || "  (空)"}`
+          `标签分布:\n${tagLines || "  (空)"}\n\n` +
+          `📋 查询日志\n` +
+          `总查询: ${logStats.queryCount}\n` +
+          `总反馈: ${logStats.feedbackCount} (反馈率: ${fbRate})\n` +
+          `日志大小: ${logStats.logSize}\n` +
+          `反馈大小: ${logStats.feedbackSize}`
         );
       },
     });

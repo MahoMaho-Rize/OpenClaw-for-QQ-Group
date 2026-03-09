@@ -39,3 +39,11 @@ identity/
 devices/
 subagents/
 logs/
+
+# Workspace prompts (private - synced via tunnel, not GitHub)
+workspace/
+
+# Legacy planning docs (contain internal architecture details)
+EXECUTION-PLAN.md
+TOOLS.md
+test-endpoints.sh

@@ -1,0 +1,21 @@
+{
+  "id": "rag",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "siliconflowApiKey": {
+        "type": "string",
+        "description": "SiliconFlow API Key for embedding model"
+      },
+      "embeddingModel": {
+        "type": "string",
+        "description": "Embedding model name (default: BAAI/bge-m3)"
+      },
+      "dataDir": {
+        "type": "string",
+        "description": "Data directory for vector storage (default: auto)"
+      }
+    }
+  }
+}

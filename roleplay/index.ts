@@ -2,57 +2,110 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import * as https from "node:https";
 import * as zlib from "node:zlib";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 /* ------------------------------------------------------------------ */
 /*  Roleplay Plugin                                                    */
 /*  Multiple character personas backed by free SiliconFlow models.     */
-/*  Characters are defined in the CHARACTERS array below.              */
-/*  Each character has a name, aliases, system prompt, and model.      */
+/*  Characters loaded from characters/ subfolder (.md files).          */
+/*                                                                     */
+/*  Each .md file format:                                              */
+/*    ---                                                              */
+/*    name: 若叶睦                                                      */
+/*    aliases: 若叶睦,睦,mutsumi,mortis,墨缇丝                          */
+/*    model: THUDM/GLM-4.1V-9B-Thinking                               */
+/*    temperature: 0.85                                                */
+/*    max_tokens: 1024                                                 */
+/*    ---                                                              */
+/*    (rest of file is the system prompt / SOUL)                       */
 /* ------------------------------------------------------------------ */
 
 const SF_API_BASE = "https://api.siliconflow.cn";
+const DEFAULT_MODEL = "THUDM/GLM-4.1V-9B-Thinking";
+const DEFAULT_TEMPERATURE = 0.85;
+const DEFAULT_MAX_TOKENS = 1024;
 const REQUEST_TIMEOUT = 30_000;
 
-/* ---- Character definitions ---- */
+/* ---- Character type ---- */
 
 interface Character {
-  /** Display name */
   name: string;
-  /** Trigger aliases (lowercase). First one is the canonical name. */
   aliases: string[];
-  /** System prompt that defines the character's personality */
   systemPrompt: string;
-  /** SiliconFlow model ID */
   model: string;
-  /** Sampling temperature (0-2). Default 0.8 */
-  temperature?: number;
-  /** Max output tokens. Default 1024 */
-  maxTokens?: number;
+  temperature: number;
+  maxTokens: number;
+  filename: string;
 }
 
-/*
- * ============================================================
- *  CHARACTER ROSTER — 在这里添加角色
- *  每个角色需要: name, aliases, systemPrompt, model
- *
- *  可用的免费模型:
- *    - Qwen/Qwen3.5-4B              (快，中文好)
- *    - deepseek-ai/DeepSeek-R1-Distill-Qwen-7B  (会推理)
- *    - THUDM/GLM-4.1V-9B-Thinking   (理性，稳)
- *
- *  示例角色（取消注释并修改即可启用）:
- *  {
- *    name: "御坂美琴",
- *    aliases: ["御坂美琴", "美琴", "炮姐", "misaka"],
- *    systemPrompt: "你是御坂美琴……（人设描述）",
- *    model: "Qwen/Qwen3.5-4B",
- *    temperature: 0.85,
- *  },
- * ============================================================
- */
-const CHARACTERS: Character[] = [
-  // 在这里添加角色，格式参考上面的示例
-];
+/* ---- Load characters from .md files ---- */
+
+function parseCharacterFile(filePath: string): Character | null {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const filename = path.basename(filePath, ".md");
+
+    // Parse YAML frontmatter between --- delimiters
+    const match = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+    if (!match) {
+      console.warn(`[roleplay] ${filename}.md: no frontmatter found, skipping`);
+      return null;
+    }
+
+    const frontmatter = match[1];
+    const body = match[2].trim();
+
+    if (!body) {
+      console.warn(`[roleplay] ${filename}.md: empty body, skipping`);
+      return null;
+    }
+
+    // Simple YAML parsing (key: value)
+    const meta: Record<string, string> = {};
+    for (const line of frontmatter.split("\n")) {
+      const kv = line.match(/^(\w+)\s*:\s*(.+)$/);
+      if (kv) meta[kv[1]] = kv[2].trim();
+    }
+
+    const name = meta.name || filename;
+    const aliases = (meta.aliases || name)
+      .split(",")
+      .map((a) => a.trim())
+      .filter(Boolean);
+
+    return {
+      name,
+      aliases,
+      systemPrompt: body,
+      model: meta.model || DEFAULT_MODEL,
+      temperature: parseFloat(meta.temperature || "") || DEFAULT_TEMPERATURE,
+      maxTokens: parseInt(meta.max_tokens || "", 10) || DEFAULT_MAX_TOKENS,
+      filename,
+    };
+  } catch (err) {
+    console.error(`[roleplay] Failed to parse ${filePath}:`, err);
+    return null;
+  }
+}
+
+function loadCharacters(pluginDir: string): Character[] {
+  const charDir = path.join(pluginDir, "characters");
+  if (!fs.existsSync(charDir)) {
+    console.warn(`[roleplay] characters/ directory not found at ${charDir}`);
+    return [];
+  }
+
+  const files = fs.readdirSync(charDir).filter((f) => f.endsWith(".md"));
+  const chars: Character[] = [];
+
+  for (const file of files) {
+    const char = parseCharacterFile(path.join(charDir, file));
+    if (char) chars.push(char);
+  }
+
+  return chars;
+}
 
 /* ---- HTTP helper for SiliconFlow (OpenAI-compatible) ---- */
 
@@ -71,8 +124,8 @@ function sfChatCompletion(
   const body = JSON.stringify({
     model,
     messages,
-    temperature: opts.temperature ?? 0.8,
-    max_tokens: opts.maxTokens ?? 1024,
+    temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
     stream: false,
   });
 
@@ -117,13 +170,12 @@ function sfChatCompletion(
             const data = JSON.parse(raw);
             const choice = data.choices?.[0];
             if (!choice) {
-              reject(new Error(`SiliconFlow: no choices in response`));
+              reject(new Error("SiliconFlow: no choices in response"));
               return;
             }
 
-            // Handle thinking models: they may have reasoning_content + content
             let content = choice.message?.content || "";
-            // Strip any <think>...</think> blocks from the response
+            // Strip <think>...</think> blocks from thinking models
             content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
             resolve({
@@ -156,15 +208,16 @@ function text(str: string) {
   return { content: [{ type: "text" as const, text: str }] };
 }
 
-function findCharacter(query: string): Character | null {
+function findCharacter(characters: Character[], query: string): Character | null {
   const q = query.toLowerCase().trim();
-  for (const char of CHARACTERS) {
+  // Exact match first
+  for (const char of characters) {
     for (const alias of char.aliases) {
       if (alias.toLowerCase() === q) return char;
     }
   }
-  // Fuzzy: check if query contains any alias or vice versa
-  for (const char of CHARACTERS) {
+  // Fuzzy: contains
+  for (const char of characters) {
     for (const alias of char.aliases) {
       if (q.includes(alias.toLowerCase()) || alias.toLowerCase().includes(q)) {
         return char;
@@ -176,6 +229,13 @@ function findCharacter(query: string): Character | null {
 
 /* ---- Plugin ---- */
 
+// Resolve plugin directory
+const PLUGIN_DIR = path.dirname(
+  typeof __filename !== "undefined"
+    ? __filename
+    : new URL(import.meta.url).pathname
+);
+
 const plugin = {
   id: "roleplay",
   name: "Roleplay",
@@ -183,16 +243,17 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     const apiKey = api.pluginConfig?.siliconflowApiKey as string;
+    const characters = loadCharacters(PLUGIN_DIR);
 
     if (!apiKey) {
-      console.warn(
-        "[roleplay] ⚠ No siliconflowApiKey in plugin config. Plugin loaded but API calls will fail."
-      );
+      console.warn("[roleplay] ⚠ No siliconflowApiKey configured. API calls will fail.");
     }
 
-    if (CHARACTERS.length === 0) {
-      console.warn(
-        "[roleplay] ⚠ No characters defined. Add characters to the CHARACTERS array in index.ts."
+    if (characters.length === 0) {
+      console.warn("[roleplay] ⚠ No characters found in characters/ folder.");
+    } else {
+      console.log(
+        `[roleplay] Loaded ${characters.length} characters: ${characters.map((c) => c.name).join(", ")}`
       );
     }
 
@@ -202,19 +263,18 @@ const plugin = {
       label: "角色扮演对话",
       description: `与不同角色进行对话。每个角色有独立的性格和说话风格，由不同的AI模型驱动。
 当用户想要和特定角色聊天时使用此工具。
-${CHARACTERS.length > 0 ? `当前可用角色：${CHARACTERS.map((c) => c.name).join("、")}` : "暂无可用角色。"}
-注意：角色的回复仅供娱乐，不代表任何真实人物或组织的观点。`,
+${characters.length > 0 ? `当前可用角色：${characters.map((c) => c.name).join("、")}` : "暂无可用角色。"}
+注意：这些角色来自BanG Dream!系列，回复仅供娱乐。`,
       parameters: Type.Object({
         character: Type.String({
-          description: `角色名称。${CHARACTERS.length > 0 ? `可选：${CHARACTERS.map((c) => `${c.name}(${c.aliases.slice(0, 3).join("/")})` ).join("、")}` : "暂无可用角色"}`,
+          description: `角色名称或别名。${characters.length > 0 ? `可选：${characters.map((c) => `${c.name}(${c.aliases.slice(0, 3).join("/")})` ).join("、")}` : "暂无"}`,
         }),
         message: Type.String({
           description: "用户想对该角色说的话",
         }),
         context: Type.Optional(
           Type.String({
-            description:
-              "可选的对话上下文/背景信息，帮助角色更好地理解对话场景",
+            description: "可选的对话上下文/背景信息",
           })
         ),
       }),
@@ -227,15 +287,13 @@ ${CHARACTERS.length > 0 ? `当前可用角色：${CHARACTERS.map((c) => c.name).
         const userMessage = (params.message as string).trim();
         const context = (params.context as string | undefined)?.trim();
 
-        if (!userMessage) {
-          return text("❌ 请输入想说的话");
-        }
+        if (!userMessage) return text("❌ 请输入想说的话");
 
-        const character = findCharacter(characterQuery);
+        const character = findCharacter(characters, characterQuery);
         if (!character) {
           const available =
-            CHARACTERS.length > 0
-              ? `当前可用角色：${CHARACTERS.map((c) => c.name).join("、")}`
+            characters.length > 0
+              ? `当前可用角色：${characters.map((c) => c.name).join("、")}`
               : "当前没有可用角色";
           return text(`❌ 找不到角色「${characterQuery}」。${available}`);
         }
@@ -249,10 +307,7 @@ ${CHARACTERS.length > 0 ? `当前可用角色：${CHARACTERS.map((c) => c.name).
         ];
 
         if (context) {
-          messages.push({
-            role: "system",
-            content: `[对话背景] ${context}`,
-          });
+          messages.push({ role: "system", content: `[对话背景] ${context}` });
         }
 
         messages.push({ role: "user", content: userMessage });
@@ -275,9 +330,7 @@ ${CHARACTERS.length > 0 ? `当前可用角色：${CHARACTERS.map((c) => c.name).
           return text(reply);
         } catch (err) {
           console.error(`[roleplay] ${character.name} error:`, err);
-          return text(
-            `❌ ${character.name}暂时无法回应: ${String(err).slice(0, 100)}`
-          );
+          return text(`❌ ${character.name}暂时无法回应: ${String(err).slice(0, 100)}`);
         }
       },
     });
@@ -290,26 +343,24 @@ ${CHARACTERS.length > 0 ? `当前可用角色：${CHARACTERS.map((c) => c.name).
 当用户问"有哪些角色/能找谁聊天"时使用此工具。`,
       parameters: Type.Object({}),
       execute: async () => {
-        if (CHARACTERS.length === 0) {
+        if (characters.length === 0) {
           return text("当前没有可用的角色。角色正在招募中～");
         }
 
-        const lines = CHARACTERS.map((c, i) => {
-          const aliases = c.aliases.slice(1); // skip first (usually same as name)
-          const aliasStr = aliases.length > 0 ? `（也叫：${aliases.join("、")}）` : "";
+        const lines = characters.map((c, i) => {
+          const aliases = c.aliases.filter((a) => a !== c.name).slice(0, 3);
+          const aliasStr = aliases.length > 0 ? `（${aliases.join("、")}）` : "";
           return `${i + 1}. ${c.name}${aliasStr}`;
         });
 
         return text(
-          [`🎭 可用角色：`, "", ...lines, "", "用「找XX聊天」或「让XX说…」来召唤角色"].join(
-            "\n"
-          )
+          [`🎭 可用角色：`, "", ...lines, "", "用「找XX聊天」或「让XX说…」来召唤ta们吧"].join("\n")
         );
       },
     });
 
     console.log(
-      `[roleplay] Registered 2 tools (character_chat, character_list), ${CHARACTERS.length} characters loaded`
+      `[roleplay] Registered 2 tools, ${characters.length} characters`
     );
   },
 };

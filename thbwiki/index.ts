@@ -88,12 +88,14 @@ const plugin = {
       {
         name: "thbwiki",
         label: "THBWiki",
-        description: `Search and read articles on THBWiki (thwiki.cc), the Chinese Touhou Project encyclopedia.
-Actions:
-- search: Search pages by keyword. Params: keyword (required), limit (default 5, max 20)
-- page: Get a page's intro text and section list. Params: title (required)
-- sections: List all sections of a page. Params: title (required)
-- read_section: Read a specific section's content. Params: title (required), section (required, index from 'sections' result)`,
+        description: `东方Project (Touhou) 专用百科。搜索和阅读 THBWiki (thwiki.cc) 上的词条，覆盖东方Project的角色、作品、音乐、设定、同人等全部内容。查东方相关信息必须用此工具，不要用 moegirl。
+操作:
+- search: 按关键词搜索页面。参数: keyword(必填), limit(默认5, 最大20)
+- page: 获取页面简介和目录。参数: title(必填)
+- sections: 列出页面所有章节标题。参数: title(必填)
+- read_section: 读取指定章节内容。参数: title(必填), section(必填，从 sections 结果获取)
+
+数据来源：THBWiki (thwiki.cc)`,
         parameters: THBWikiSchema,
 
         async execute(_toolCallId: string, params: any) {

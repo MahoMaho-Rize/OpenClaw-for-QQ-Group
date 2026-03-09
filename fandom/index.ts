@@ -126,25 +126,21 @@ const plugin = {
       {
         name: "fandom",
         label: "Fandom Wiki",
-        description: `Search and read articles on any Fandom wiki (*.fandom.com).
-Fandom hosts thousands of wikis covering games, anime, movies, TV, books, and more.
-Each wiki has a subdomain like onepiece.fandom.com, genshin-impact.fandom.com, etc.
+        description: `搜索和阅读 Fandom 百科 (*.fandom.com) 上的词条。Fandom 托管了数千个英文 wiki，覆盖游戏、动漫、影视、小说等IP。适用于：战锤、高达、魔戒、漫威、DC、星球大战、哈利波特、我的世界、塞尔达等非中文ACG百科覆盖的IP。中文ACG内容请优先用 moegirl，东方用 thbwiki。
 
-Common wiki subdomains:
-  onepiece, naruto, bleach, dragonball, jojo, genshin-impact, honkai-star-rail,
-  minecraft, zelda, mario, pokemon, finalfantasy, typemoon, touhou,
-  marvel, dc, starwars, harrypotter, gameofthrones, lordoftherings
+常用 wiki 子域名：
+  onepiece, naruto, genshin-impact, minecraft, zelda, mario, pokemon,
+  finalfantasy, typemoon, marvel, dc, starwars, harrypotter, lordoftherings, warhammer40k, gundam
 
-Actions:
-- search: Search pages by keyword. Params: wiki (required), keyword (required), lang (optional), limit (default 5)
-- page: Get intro section text of a page. Params: wiki (required), title (required), lang (optional)
-- sections: List all sections/headings of a page. Params: wiki (required), title (required), lang (optional)
-- read_section: Read a specific section by index. Params: wiki (required), title (required), section (required, from sections result), lang (optional)
+操作:
+- search: 搜索页面。参数: wiki(必填), keyword(必填), lang(可选), limit(默认5)
+- page: 获取页面简介。参数: wiki(必填), title(必填), lang(可选)
+- sections: 列出章节目录。参数: wiki(必填), title(必填), lang(可选)
+- read_section: 读取指定章节。参数: wiki(必填), title(必填), section(必填), lang(可选)
 
-Tips:
-- Use search first to find exact page titles, then use page/sections/read_section.
-- Page titles are case-sensitive and may use underscores for spaces.
-- For Chinese/Japanese content, try adding lang='zh' or lang='ja' if the wiki has that variant.`,
+提示: 多语言 wiki 可加 lang='zh' 或 lang='ja'。页面标题区分大小写。
+
+数据来源：Fandom`,
         parameters: FandomSchema,
 
         async execute(_toolCallId: string, params: any) {

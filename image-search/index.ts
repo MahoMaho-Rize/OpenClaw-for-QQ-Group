@@ -490,7 +490,7 @@ const plugin = {
     api.registerTool({
       name: "image_search",
       label: "图片搜索",
-      description: `通过 Danbooru / Bing / Yandex 图片搜索找图片。返回图片的直链URL。
+      description: `图片搜索工具。二次元/ACG角色图片首选 source=danbooru；真人/风景/通用图片用 source=bing。返回图片直链URL。
 支持三个搜索引擎，各有优势：
 - **danbooru**: 二次元角色图片专用。最大的 Booru 风格图库，用英文/罗马字 tag 搜索（如 hakurei_reimu, akiyama_mizuki）。图片质量极高、标签精确、包含所有评级内容。**ACG 角色首选**。
 - **bing**: 适合通用搜索、真人、中文关键词，国内可直连

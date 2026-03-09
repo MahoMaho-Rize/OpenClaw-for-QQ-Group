@@ -136,11 +136,13 @@ const plugin = {
       {
         name: "moegirl",
         label: "萌娘百科",
-        description: `Search and read articles on 萌娘百科 (Moegirlpedia, zh.moegirl.org.cn), a Chinese ACG encyclopedia covering anime, manga, games, light novels, vocaloid, virtual YouTubers, and more.
-Actions:
-- search: Search pages by keyword. Returns matching titles and links. Params: keyword (required), limit (default 5, max 10)
-- page: Get the full text content of a page. Params: title (required). Use search first to find the exact title.
-- categories: Get categories of a page. Params: title (required), limit (default 10)`,
+        description: `搜索和阅读萌娘百科 (zh.moegirl.org.cn) 上的词条。中文ACG百科，覆盖动画、漫画、游戏、轻小说、Vocaloid、VTuber等。注意：东方Project相关内容请优先使用 thbwiki 工具（THBWiki 数据更全）。
+操作:
+- search: 按关键词搜索页面。参数: keyword(必填), limit(默认5, 最大10)
+- page: 获取页面正文内容。参数: title(必填)。建议先用 search 确认准确标题
+- categories: 获取页面分类。参数: title(必填), limit(默认10)
+
+数据来源：萌娘百科`,
         parameters: MoegirlSchema,
 
         async execute(_toolCallId: string, params: any) {

@@ -137,13 +137,15 @@ const plugin = {
       {
         name: "bangumi",
         label: "Bangumi",
-        description: `Search and look up anime, manga, game, music entries on Bangumi (bgm.tv / bangumi.tv), a Chinese ACG database.
-Actions:
-- search: Search subjects by keyword. Params: keyword (required), type (optional: anime/book/game/music/real), limit (default 5)
-- detail: Get full details of a subject. Params: subject_id (required)
-- characters: List characters of a subject. Params: subject_id (required), limit (default 10)
-- related: Get related subjects (sequels, prequels, spin-offs). Params: subject_id (required)
-- persons: Get staff/cast of a subject. Params: subject_id (required), limit (default 10)`,
+        description: `在 Bangumi (bgm.tv) 搜索和查询动画、漫画、游戏、音乐条目。中文ACG数据库，有评分、标签、角色、制作人员等详细信息。
+操作:
+- search: 按关键词搜索条目。参数: keyword(必填), type(可选: anime/book/game/music/real), limit(默认5)
+- detail: 查看条目详情。参数: subject_id(必填)
+- characters: 查看角色列表。参数: subject_id(必填), limit(默认10)
+- related: 查看关联条目（续作、前传、外传等）。参数: subject_id(必填)
+- persons: 查看制作人员/声优。参数: subject_id(必填), limit(默认10)
+
+数据来源：bangumi.tv`,
         parameters: BangumiSchema,
 
         async execute(_toolCallId: string, params: any) {

@@ -268,13 +268,12 @@ const plugin = {
     api.registerTool({
       name: "bing",
       label: "Bing Search",
-      description: `Bing 网页搜索工具。通过爬取 cn.bing.com 获取搜索结果。
+      description: `Bing 网页搜索（备用）。当 searxng 不可用或结果不佳时使用。通过爬取 cn.bing.com 获取搜索结果。
 支持两种操作：
 - search: 搜索关键词，返回标题、URL、摘要列表
-- fetch: 获取指定 URL 的页面正文内容（用于深度阅读搜索结果）
+- fetch: 获取指定 URL 的页面正文内容
 
-适用场景：需要搜索最新信息、新闻、事件，查找特定网站或资源，获取网页正文内容。中英文搜索均可。
-注意：对于东方Project、动漫、番剧等垂直领域，建议优先使用专用工具（thbwiki、moegirl、bangumi、fandom），Bing 搜索作为通用补充。`,
+注意：默认搜索请用 searxng，Bing 仅作为备用。垂直领域请用专用工具。`,
       parameters: Type.Object({
         action: Type.Union(
           [Type.Literal("search"), Type.Literal("fetch")],

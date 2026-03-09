@@ -1,0 +1,8 @@
+{
+  "id": "deepwiki",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

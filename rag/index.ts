@@ -14,6 +14,7 @@ interface SearchResult {
   document: string;
   score: number;
   metadata: Record<string, string>;
+  source: "moegirl" | "wikipedia";
 }
 
 /** Query log entry */
@@ -23,11 +24,12 @@ interface QueryLogEntry {
   query: string;
   topK: number;
   tag?: string;
-  backend: "chroma" | "local";
+  sources: string[];
   results: {
     id: string;
     score: number;
     title: string;
+    source: string;
     textPreview: string;
   }[];
   latencyMs: number;
@@ -42,10 +44,17 @@ interface FeedbackEntry {
 }
 
 const DEFAULT_TOP_K = 5;
-const DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3";
-const EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings";
-const DEFAULT_CHROMA_URL = "http://127.0.0.1:8100";
-const DEFAULT_CHROMA_COLLECTION = "moegirl_wiki";
+const CHROMA_URL = "http://127.0.0.1:8100";
+
+// Moegirl: bge-m3 via SiliconFlow
+const MOEGIRL_COLLECTION = "moegirl_wiki";
+const MOEGIRL_EMBEDDING_MODEL = "BAAI/bge-m3";
+const SILICONFLOW_EMBED_URL = "https://api.siliconflow.cn/v1/embeddings";
+
+// Wikipedia: Cohere embed-multilingual-v3.0
+const WIKI_COLLECTION = "wiki_zh";
+const WIKI_EMBEDDING_MODEL = "embed-multilingual-v3.0";
+const COHERE_EMBED_URL = "https://api.cohere.com/v2/embed";
 
 // ============================================================
 // §1  HTTP Helpers
@@ -110,21 +119,22 @@ function httpRequest(
 }
 
 // ============================================================
-// §2  Embedding Provider (SiliconFlow)
+// §2  Embedding Providers
 // ============================================================
 
-async function getEmbeddings(
+/** SiliconFlow embedding (for moegirl / bge-m3) */
+async function embedSiliconFlow(
   texts: string[],
   apiKey: string,
-  model: string = DEFAULT_EMBEDDING_MODEL
+  model: string = MOEGIRL_EMBEDDING_MODEL
 ): Promise<number[][]> {
   const body = JSON.stringify({ model, input: texts, encoding_format: "float" });
-  const res = await httpsRequest(EMBEDDING_API_URL, {
+  const res = await httpsRequest(SILICONFLOW_EMBED_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
   }, body);
   if (res.status !== 200) {
-    throw new Error(`Embedding API error ${res.status}: ${res.data.slice(0, 200)}`);
+    throw new Error(`SiliconFlow embed error ${res.status}: ${res.data.slice(0, 200)}`);
   }
   const json = JSON.parse(res.data);
   const sorted = (json.data as { index: number; embedding: number[] }[])
@@ -132,8 +142,32 @@ async function getEmbeddings(
   return sorted.map((d) => d.embedding);
 }
 
-async function getEmbedding(text: string, apiKey: string, model?: string): Promise<number[]> {
-  return (await getEmbeddings([text], apiKey, model))[0];
+/** Cohere embedding (for wikipedia / embed-multilingual-v3) */
+async function embedCohere(
+  texts: string[],
+  apiKey: string,
+  inputType: "search_query" | "search_document" = "search_query",
+  model: string = WIKI_EMBEDDING_MODEL
+): Promise<number[][]> {
+  const body = JSON.stringify({
+    model,
+    input_type: inputType,
+    texts,
+    embedding_types: ["float"],
+  });
+  const res = await httpsRequest(COHERE_EMBED_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+  }, body);
+  if (res.status !== 200) {
+    throw new Error(`Cohere embed error ${res.status}: ${res.data.slice(0, 200)}`);
+  }
+  const json = JSON.parse(res.data);
+  // v2 response: { embeddings: { float: [[...], ...] } }
+  return json.embeddings.float as number[][];
 }
 
 // ============================================================
@@ -144,6 +178,7 @@ class ChromaClient {
   private baseUrl: string;
   private collectionName: string;
   private collectionId: string | null = null;
+  private available: boolean | null = null;
 
   constructor(baseUrl: string, collectionName: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -166,22 +201,34 @@ class ChromaClient {
     if (res.status === 200) {
       const data = JSON.parse(res.data);
       this.collectionId = data.id;
+      this.available = true;
       return this.collectionId!;
     }
 
-    throw new Error(`Collection "${this.collectionName}" not found (status ${res.status}): ${res.data.slice(0, 200)}`);
+    this.available = false;
+    throw new Error(`Collection "${this.collectionName}" not found (status ${res.status})`);
+  }
+
+  /** Check if collection is available */
+  async isAvailable(): Promise<boolean> {
+    if (this.available !== null) return this.available;
+    try {
+      await this.getCollectionId();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Query by embedding vector */
-  async query(queryEmbedding: number[], nResults: number = 5, whereFilter?: Record<string, unknown>): Promise<SearchResult[]> {
+  async query(queryEmbedding: number[], nResults: number = 5): Promise<SearchResult[]> {
     const collId = await this.getCollectionId();
 
-    const payload: Record<string, unknown> = {
+    const payload = {
       query_embeddings: [queryEmbedding],
       n_results: nResults,
       include: ["documents", "metadatas", "distances"],
     };
-    if (whereFilter) payload.where = whereFilter;
 
     const res = await httpRequest(
       `${this.v2Base}/collections/${collId}/query`,
@@ -205,32 +252,8 @@ class ChromaClient {
       // ChromaDB cosine distance = 1 - similarity; convert to similarity
       score: 1 - (distances[i] || 0),
       metadata: metadatas[i] || {},
+      source: this.collectionName === MOEGIRL_COLLECTION ? "moegirl" as const : "wikipedia" as const,
     }));
-  }
-
-  /** Health check */
-  async heartbeat(): Promise<{ ok: boolean; version?: string; collections?: number }> {
-    try {
-      const res = await httpRequest(`${this.baseUrl}/api/v2/heartbeat`, { method: "GET" });
-      if (res.status !== 200) return { ok: false };
-
-      const listRes = await httpRequest(
-        `${this.v2Base}/collections`,
-        { method: "GET", headers: { "Content-Type": "application/json" } }
-      );
-      let collections = 0;
-      if (listRes.status === 200) {
-        const arr = JSON.parse(listRes.data);
-        collections = Array.isArray(arr) ? arr.length : 0;
-      }
-
-      const verRes = await httpRequest(`${this.baseUrl}/api/v2/version`, { method: "GET" });
-      const version = verRes.status === 200 ? JSON.parse(verRes.data) : "unknown";
-
-      return { ok: true, version: String(version), collections };
-    } catch {
-      return { ok: false };
-    }
   }
 
   /** Get collection stats */
@@ -247,6 +270,19 @@ class ChromaClient {
       return null;
     } catch {
       return null;
+    }
+  }
+
+  /** Health check */
+  async heartbeat(): Promise<{ ok: boolean; version?: string }> {
+    try {
+      const res = await httpRequest(`${this.baseUrl}/api/v2/heartbeat`, { method: "GET" });
+      if (res.status !== 200) return { ok: false };
+      const verRes = await httpRequest(`${this.baseUrl}/api/v2/version`, { method: "GET" });
+      const version = verRes.status === 200 ? JSON.parse(verRes.data) : "unknown";
+      return { ok: true, version: String(version) };
+    } catch {
+      return { ok: false };
     }
   }
 }
@@ -282,10 +318,6 @@ class QueryLogger {
     return this.recentQueries[this.recentQueries.length - 1]?.queryId ?? null;
   }
 
-  getRecentQueries(n: number = 5): { queryId: string; query: string }[] {
-    return this.recentQueries.slice(-n).reverse();
-  }
-
   getStats(): { queryCount: number; feedbackCount: number; logSize: string; feedbackSize: string } {
     const count = (p: string) => {
       if (!fs.existsSync(p)) return 0;
@@ -317,6 +349,11 @@ function text(str: string) {
   return { content: [{ type: "text" as const, text: str }] };
 }
 
+const SOURCE_LABEL: Record<string, string> = {
+  moegirl: "萌娘百科",
+  wikipedia: "中文维基百科",
+};
+
 // ============================================================
 // §6  Plugin Entry
 // ============================================================
@@ -324,83 +361,146 @@ function text(str: string) {
 export default {
   id: "rag",
   name: "RAG Knowledge Base",
-  description: "向量知识库：萌娘百科23万条目语义检索、查询日志与反馈闭环",
+  description: "向量知识库：萌娘百科 + 中文维基百科 语义检索，查询日志与反馈闭环",
 
   register(api: OpenClawPluginApi) {
     const cfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
-    const apiKey = (cfg.siliconflowApiKey as string) || "";
-    const embeddingModel = (cfg.embeddingModel as string) || DEFAULT_EMBEDDING_MODEL;
-    const chromaUrl = (cfg.chromaUrl as string) || DEFAULT_CHROMA_URL;
-    const chromaCollection = (cfg.chromaCollection as string) || DEFAULT_CHROMA_COLLECTION;
+    const siliconflowKey = (cfg.siliconflowApiKey as string) || "";
+    const cohereKey = (cfg.cohereApiKey as string) || "";
     const dataDir = (cfg.dataDir as string) ||
       path.join(process.env.HOME || "/tmp", ".openclaw", "extensions", "rag", "data");
 
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-    const chroma = new ChromaClient(chromaUrl, chromaCollection);
+    const chromaMoegirl = new ChromaClient(CHROMA_URL, MOEGIRL_COLLECTION);
+    const chromaWiki = new ChromaClient(CHROMA_URL, WIKI_COLLECTION);
     const logger = new QueryLogger(dataDir);
 
     // ----------------------------------------------------------
-    // Tool: rag_search  —  语义搜索知识库
+    // Tool: rag_search  —  语义搜索知识库（双库融合）
     // ----------------------------------------------------------
     api.registerTool({
       name: "rag_search",
       label: "知识库搜索",
-      description: "在萌娘百科向量知识库中语义搜索（23万条目）。查找ACG角色、作品、声优、梗等百科知识时使用。输入自然语言查询。",
+      description: "在知识库中语义搜索。包含萌娘百科（23万条ACG百科）和中文维基百科（277万条综合百科）。查找任何百科知识时使用。输入自然语言查询。",
       parameters: Type.Object({
         query: Type.String({ description: "搜索查询（自然语言）" }),
-        top_k: Type.Optional(Type.Number({ description: "返回结果数量，默认5", minimum: 1, maximum: 20 })),
+        top_k: Type.Optional(Type.Number({ description: "每个库返回的结果数量，默认5", minimum: 1, maximum: 20 })),
+        source: Type.Optional(Type.Union([
+          Type.Literal("all"),
+          Type.Literal("moegirl"),
+          Type.Literal("wikipedia"),
+        ], { description: "搜索源：all=全部（默认）, moegirl=仅萌娘百科, wikipedia=仅维基百科" })),
       }),
       execute: async (_id: string, params: Record<string, unknown>) => {
-        if (!apiKey) return text("❌ RAG插件未配置 siliconflowApiKey");
-
         const query = params.query as string;
         const topK = (params.top_k as number) || DEFAULT_TOP_K;
+        const source = (params.source as string) || "all";
         const queryId = genQueryId();
         const t0 = Date.now();
 
-        try {
-          // Step 1: Embed query via SiliconFlow
-          const queryEmb = await getEmbedding(query, apiKey, embeddingModel);
+        const searchMoegirl = source === "all" || source === "moegirl";
+        const searchWiki = source === "all" || source === "wikipedia";
+        const activeSources: string[] = [];
 
-          // Step 2: Search ChromaDB via HTTP
-          const results = await chroma.query(queryEmb, topK);
+        // Check which sources are ready
+        if (searchMoegirl && !siliconflowKey) {
+          return text("❌ 萌娘百科搜索需要配置 siliconflowApiKey");
+        }
+        if (searchWiki && !cohereKey) {
+          // Silently skip wikipedia if no key and searching all
+          if (source === "wikipedia") {
+            return text("❌ 维基百科搜索需要配置 cohereApiKey");
+          }
+        }
+
+        try {
+          const allResults: SearchResult[] = [];
+
+          // Parallel: embed + query both sources
+          const promises: Promise<void>[] = [];
+
+          if (searchMoegirl && siliconflowKey && await chromaMoegirl.isAvailable()) {
+            activeSources.push("moegirl");
+            promises.push(
+              (async () => {
+                const [emb] = await embedSiliconFlow([query], siliconflowKey);
+                const results = await chromaMoegirl.query(emb, topK);
+                allResults.push(...results);
+              })()
+            );
+          }
+
+          if (searchWiki && cohereKey && await chromaWiki.isAvailable()) {
+            activeSources.push("wikipedia");
+            promises.push(
+              (async () => {
+                const [emb] = await embedCohere([query], cohereKey);
+                const results = await chromaWiki.query(emb, topK);
+                allResults.push(...results);
+              })()
+            );
+          }
+
+          if (promises.length === 0) {
+            return text("❌ 没有可用的知识库（检查ChromaDB服务和API密钥配置）");
+          }
+
+          // Wait for all sources
+          const settled = await Promise.allSettled(promises);
+          const errors = settled
+            .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+            .map((r) => r.reason?.message || "unknown error");
+
           const latencyMs = Date.now() - t0;
 
-          // Step 3: Log
+          // Sort by score descending
+          allResults.sort((a, b) => b.score - a.score);
+
+          // Log
           logger.logQuery({
             ts: new Date().toISOString(),
             queryId,
             query,
             topK,
-            backend: "chroma",
-            results: results.map((r) => ({
+            sources: activeSources,
+            results: allResults.map((r) => ({
               id: r.id,
               score: Math.round(r.score * 10000) / 10000,
               title: (r.metadata.title as string) || "",
+              source: r.source,
               textPreview: r.document.slice(0, 120),
             })),
             latencyMs,
           });
 
-          if (results.length === 0) {
-            return text(`知识库中未找到相关内容。\n[queryId: ${queryId}]`);
+          if (allResults.length === 0) {
+            const errMsg = errors.length > 0 ? `\n错误: ${errors.join("; ")}` : "";
+            return text(`知识库中未找到相关内容。${errMsg}\n[queryId: ${queryId}]`);
           }
 
           // Format results
-          const lines = results.map((r, i) => {
+          const lines = allResults.map((r, i) => {
             const title = r.metadata.title || r.id;
-            const header = `【${i + 1}】${title} (相似度: ${(r.score * 100).toFixed(1)}%)`;
-            // Strip 【title】 prefix that was added during indexing
+            const srcLabel = SOURCE_LABEL[r.source] || r.source;
+            const header = `【${i + 1}】${title} [${srcLabel}] (相似度: ${(r.score * 100).toFixed(1)}%)`;
+            // Strip 【title】 prefix from moegirl chunks
             let doc = r.document;
-            const prefixMatch = doc.match(/^【[^】]+】/);
-            if (prefixMatch) doc = doc.slice(prefixMatch[0].length);
+            if (r.source === "moegirl") {
+              const prefixMatch = doc.match(/^【[^】]+】/);
+              if (prefixMatch) doc = doc.slice(prefixMatch[0].length);
+            }
+            // Truncate very long wikipedia articles
+            if (doc.length > 800) doc = doc.slice(0, 800) + "…";
             return `${header}\n${doc}`;
           });
 
+          const sourcesUsed = [...new Set(allResults.map((r) => SOURCE_LABEL[r.source]))].join("、");
+          const errNote = errors.length > 0 ? `\n⚠️ 部分源查询失败: ${errors.join("; ")}` : "";
+
           return text(
             lines.join("\n\n---\n\n") +
-            `\n\n[queryId: ${queryId} | ${latencyMs}ms | ${results.length} hits]\n数据来源：萌娘百科`
+            `\n\n[queryId: ${queryId} | ${latencyMs}ms | ${allResults.length} hits]${errNote}\n数据来源：${sourcesUsed}`
           );
         } catch (e: any) {
           return text(`❌ 搜索失败: ${e.message}`);
@@ -445,27 +545,40 @@ export default {
     api.registerTool({
       name: "rag_stats",
       label: "知识库统计",
-      description: "显示知识库统计：ChromaDB状态、条目数、查询日志统计等。",
+      description: "显示知识库统计：ChromaDB状态、各知识库条目数、查询日志统计等。",
       parameters: Type.Object({}),
       execute: async (_id: string, _params: Record<string, unknown>) => {
         const logStats = logger.getStats();
+        const hb = await chromaMoegirl.heartbeat();
 
-        // ChromaDB status
-        const hb = await chroma.heartbeat();
-        const collStats = hb.ok ? await chroma.collectionStats() : null;
+        const moegirlStats = hb.ok ? await chromaMoegirl.collectionStats() : null;
+        const wikiStats = hb.ok ? await chromaWiki.collectionStats() : null;
 
         const fbRate = logStats.queryCount > 0
           ? `${((logStats.feedbackCount / logStats.queryCount) * 100).toFixed(0)}%`
           : "N/A";
 
+        let collectionsInfo = "";
+        if (moegirlStats) {
+          collectionsInfo += `  📗 萌娘百科: ${moegirlStats.count.toLocaleString()} chunks (bge-m3 via SiliconFlow)\n`;
+        }
+        if (wikiStats) {
+          collectionsInfo += `  📘 中文维基百科: ${wikiStats.count.toLocaleString()} entries (Cohere embed-v3)\n`;
+        }
+        if (!moegirlStats && !wikiStats) {
+          collectionsInfo += "  ⚠️ 无可用集合\n";
+        }
+
+        const keyStatus = [
+          siliconflowKey ? "SiliconFlow ✅" : "SiliconFlow ❌",
+          cohereKey ? "Cohere ✅" : "Cohere ❌",
+        ].join(" | ");
+
         return text(
           `📊 RAG 知识库统计\n\n` +
-          `ChromaDB:\n` +
-          `  状态: ${hb.ok ? "✅ 运行中" : "❌ 离线"}\n` +
-          (hb.version ? `  版本: ${hb.version}\n` : "") +
-          (hb.collections !== undefined ? `  集合数: ${hb.collections}\n` : "") +
-          (collStats ? `  当前集合: ${collStats.name} (${collStats.count.toLocaleString()} chunks)\n` : "") +
-          `  嵌入模型: ${embeddingModel}\n\n` +
+          `ChromaDB: ${hb.ok ? "✅ 运行中" : "❌ 离线"}${hb.version ? ` (v${hb.version})` : ""}\n` +
+          collectionsInfo +
+          `API密钥: ${keyStatus}\n\n` +
           `📋 查询日志\n` +
           `  总查询: ${logStats.queryCount}\n` +
           `  总反馈: ${logStats.feedbackCount} (反馈率: ${fbRate})\n` +

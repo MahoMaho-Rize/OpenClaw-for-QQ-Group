@@ -33,7 +33,8 @@ const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MAX_TOKENS = 1024;
 const REQUEST_TIMEOUT = 30_000;
 const MAX_MEMORY_CHARS = 3000; // Max chars of memory injected into system prompt
-const MAX_MEMORY_LINES = 100; // Trim oldest lines when exceeding this
+const MAX_MEMORY_LINES = 80;  // Trim oldest lines when exceeding this
+const MEMORY_TRIM_TO = 60;    // After trimming, keep this many recent lines
 
 /* ---- Character type ---- */
 
@@ -172,11 +173,10 @@ function appendMemory(character: Character, groupKey: string, entry: string): vo
       existing = fs.readFileSync(memPath, "utf-8");
     }
 
-    // Trim old lines if too many
+    // Trim old lines with sliding window (keep MEMORY_TRIM_TO most recent)
     const lines = existing.trim().split("\n").filter(Boolean);
     if (lines.length >= MAX_MEMORY_LINES) {
-      // Keep only recent half
-      const kept = lines.slice(Math.floor(lines.length / 2));
+      const kept = lines.slice(-MEMORY_TRIM_TO);
       existing = kept.join("\n") + "\n";
     }
 
@@ -192,17 +192,19 @@ function appendMemory(character: Character, groupKey: string, entry: string): vo
 /* ---- Extract group key from tool call context ---- */
 
 function extractGroupKey(params: Record<string, unknown>): string {
-  // The context param may contain group info, or we use a default
   const context = (params.context as string | undefined) || "";
 
-  // Try to extract group id from context like "qq-group:689961939" or "群号689961939"
-  const groupMatch = context.match(/(?:qq-group[:\-]?|群号?)(\d{6,})/i);
+  // Try patterns: qq-group:123, qq-group-123, groupId=123, 群号123
+  const groupMatch = context.match(/(?:qq-group[:\-]|groupId\s*=\s*|群号?)(\d{6,})/i);
   if (groupMatch) return `qq-group-${groupMatch[1]}`;
 
-  const dmMatch = context.match(/(?:qq-dm[:\-]?|私聊)(\d{6,})/i);
+  const dmMatch = context.match(/(?:qq-dm[:\-]|userId\s*=\s*|私聊)(\d{6,})/i);
   if (dmMatch) return `qq-dm-${dmMatch[1]}`;
 
-  // Fallback: global (shared across all contexts without group info)
+  // Last resort: any bare number ≥6 digits might be a group/user id
+  const bareId = context.match(/(\d{6,})/);
+  if (bareId) return `qq-unknown-${bareId[1]}`;
+
   return "global";
 }
 
@@ -371,11 +373,9 @@ ${characters.length > 0 ? `可用角色：${characters.map((c) => c.name).join("
         message: Type.String({
           description: "用户想对该角色说的话",
         }),
-        context: Type.Optional(
-          Type.String({
-            description: "对话上下文。请传入当前群标识（如 qq-group:689961939 或 qq-dm:1619287560），用于加载该群的角色记忆。也可附加额外背景信息。",
-          })
-        ),
+        context: Type.String({
+          description: "【必填】当前对话的群标识。从 <qq_context> 中提取 groupId，格式为 qq-group:{groupId}（群聊）或 qq-dm:{userId}（私聊）。示例：qq-group:689961939。可在末尾追加额外背景信息。",
+        }),
       }),
       execute: async (_id: string, params: Record<string, unknown>) => {
         if (!apiKey) {
@@ -447,8 +447,8 @@ ${characters.length > 0 ? `可用角色：${characters.map((c) => c.name).join("
           );
 
           // Append to memory: one-line summary of this interaction
-          const userSnippet = userMessage.length > 60 ? userMessage.slice(0, 60) + "…" : userMessage;
-          const replySnippet = reply.length > 80 ? reply.slice(0, 80) + "…" : reply;
+          const userSnippet = userMessage.length > 80 ? userMessage.slice(0, 80) + "…" : userMessage;
+          const replySnippet = reply.length > 150 ? reply.slice(0, 150) + "…" : reply;
           appendMemory(character, groupKey, `用户说「${userSnippet}」→ ${character.name}回复「${replySnippet}」`);
 
           return text(reply);

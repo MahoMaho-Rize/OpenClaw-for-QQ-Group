@@ -6,19 +6,11 @@
     "properties": {
       "siliconflowApiKey": {
         "type": "string",
-        "description": "SiliconFlow API Key for embedding model"
+        "description": "SiliconFlow API Key for bge-m3 embedding (moegirl)"
       },
-      "embeddingModel": {
+      "cohereApiKey": {
         "type": "string",
-        "description": "Embedding model name (default: BAAI/bge-m3)"
-      },
-      "chromaUrl": {
-        "type": "string",
-        "description": "ChromaDB HTTP server URL (default: http://127.0.0.1:8100)"
-      },
-      "chromaCollection": {
-        "type": "string",
-        "description": "ChromaDB collection name (default: moegirl_wiki)"
+        "description": "Cohere API Key for embed-multilingual-v3 (wikipedia)"
       },
       "dataDir": {
         "type": "string",

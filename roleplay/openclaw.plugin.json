@@ -1,0 +1,13 @@
+{
+  "id": "roleplay",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "siliconflowApiKey": {
+        "type": "string",
+        "description": "SiliconFlow API key (sk-...)"
+      }
+    }
+  }
+}

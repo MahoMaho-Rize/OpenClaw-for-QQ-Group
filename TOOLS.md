@@ -311,25 +311,36 @@ B站视频搜索、视频详情、热门评论。
 
 ### [公共交通]
 
-全球公共交通查询（日本JR/私铁/地铁、欧洲DB/SNCF、北美等）。
-数据来自 Transitous（MOTIS路由引擎），免费无需API Key。
+**日本交通**用 Ekispert（駅すぱあと），覆盖全部JR/私铁/地铁/新干线/巴士，含实时时刻表和票价。
+**其他地区**用 Transitous（MOTIS路由引擎），覆盖欧洲/北美等。
 
 ```
-├─ "XX站在哪 / 搜索车站 / 有什么站"
-│  → transit_search (输入站名，返回stopId/坐标/交通方式)
+├─ 日本相关：
+│  ├─ "搜索日本车站 / XX駅 / 站名确认"
+│  │  → ekispert_station (搜索站名，支持汉字/假名/罗马字)
+│  │
+│  ├─ "从新宿到池袋 / 东京到大阪新干线 / 换乘方案 / 票价"
+│  │  → ekispert_route (路线+时刻表+票价+定期券价格)
+│  │
+│  └─ "日本电车延误 / 运行情报 / 停运信息"
+│     → ekispert_disruption (列车运行异常情报)
 │
-├─ "从A到B怎么坐车 / 换乘方案 / 路线规划"
-│  → transit_route (自动geocode站名，返回最优路线+换乘详情)
-│
-└─ "XX站接下来有什么车 / 发车时刻表 / 出发信息"
-   → transit_departures (返回即将出发的班次列表)
+├─ 其他地区 / 全球：
+│  ├─ "XX站在哪 / 搜索车站"
+│  │  → transit_search (Transitous全球站点搜索)
+│  │
+│  ├─ "从A到B怎么坐车 / 换乘方案"
+│  │  → transit_route (Transitous路线规划)
+│  │
+│  └─ "XX站发车时刻表"
+│     → transit_departures (Transitous出发信息)
 ```
 
 **⚠ 注意**：
-- 中文地名需要先用 transit_search 或让 transit_route 自动 geocode
-- 日本站名建议用日文/英文（如 Shinjuku, 新宿）
-- 中国高铁/公交覆盖较弱（Transitous主要覆盖日本、欧洲、北美）
-- 如果查不到路线，用 `searxng` 兜底搜索
+- 日本交通优先用 ekispert 系列工具（数据更准确，含票价和时刻表）
+- 日本站名建议用日文（如「新宿」「東京」），不确定时先用 ekispert_station 搜索
+- 欧洲/北美等地区用 transit 系列工具
+- 中国高铁/公交覆盖较弱，如果查不到用 `searxng` 兜底
 
 ### [五大联赛]
 
@@ -511,8 +522,8 @@ GitHub 仓库搜索、项目详情、Issues、用户、趋势。
 | "恒生指数" | akshare_* | stock_quote(^HSI) | 港股指数用Yahoo Finance |
 | "东方project角色" | moegirl | thbwiki | 东方专用wiki更准 |
 | "高达设定" | moegirl | fandom | 高达用fandom wiki |
-| "东京到大阪怎么走" | searxng | transit_route | 公交出行有专用工具 |
-| "新宿站时刻表" | searxng | transit_departures | 车站时刻表有专用工具 |
+| "东京到大阪怎么走" | searxng | ekispert_route | 日本交通用ekispert |
+| "新宿站时刻表" | searxng | ekispert_route | 日本交通用ekispert |
 | "英超积分榜" | searxng | football_standings | 五大联赛有专用工具 |
 | "今天NBA比分" | searxng | nba_scores | NBA有专用工具 |
 | "大谷翔平数据" | searxng | mlb_player | MLB有专用工具 |
@@ -540,7 +551,7 @@ GitHub 仓库搜索、项目详情、Issues、用户、趋势。
   - "东京天气+最近有地震吗" → `weather_forecast` + `earthquake_recent` ✅
   - "茅台股价和K线" → `akshare_stock_info` + `akshare_stock_hist` ✅
   - "帮我查个论文顺便看看NASA今日天文图" → `arxiv_search` + `nasa_apod` ✅
-  - "东京到京都怎么坐车+京都天气" → `transit_route` + `weather_forecast` ✅
+  - "东京到京都怎么坐车+京都天气" → `ekispert_route` + `weather_forecast` ✅
   - "英超和西甲今天比分" → `football_scores(epl)` + `football_scores(laliga)` ✅
   - "NBA排名+今天比分" → `nba_standings` + `nba_scores` ✅
   - "这个项目GitHub上有issue吗+Reddit怎么说" → `github_issues` + `reddit_search` ✅

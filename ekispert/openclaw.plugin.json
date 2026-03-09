@@ -1,0 +1,13 @@
+{
+  "id": "ekispert",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Ekispert (駅すぱあと) API key from Val Laboratory"
+      }
+    }
+  }
+}

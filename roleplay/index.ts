@@ -8,9 +8,15 @@ import * as path from "node:path";
 /* ------------------------------------------------------------------ */
 /*  Roleplay Plugin                                                    */
 /*  Multiple character personas backed by free SiliconFlow models.     */
-/*  Characters loaded from characters/ subfolder (.md files).          */
 /*                                                                     */
-/*  Each .md file format:                                              */
+/*  Directory structure:                                               */
+/*    characters/{角色名}/                                              */
+/*      persona.md        — frontmatter + system prompt                */
+/*      memory/           — per-group conversation memory              */
+/*        qq-group-XXXXX.md                                            */
+/*        qq-dm-XXXXX.md                                               */
+/*                                                                     */
+/*  persona.md format (same as old .md files):                         */
 /*    ---                                                              */
 /*    name: 若叶睦                                                      */
 /*    aliases: 若叶睦,睦,mutsumi,mortis,墨缇丝                          */
@@ -26,6 +32,8 @@ const DEFAULT_MODEL = "THUDM/GLM-4.1V-9B-Thinking";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MAX_TOKENS = 1024;
 const REQUEST_TIMEOUT = 30_000;
+const MAX_MEMORY_CHARS = 3000; // Max chars of memory injected into system prompt
+const MAX_MEMORY_LINES = 100; // Trim oldest lines when exceeding this
 
 /* ---- Character type ---- */
 
@@ -36,20 +44,29 @@ interface Character {
   model: string;
   temperature: number;
   maxTokens: number;
-  filename: string;
+  dirName: string; // directory name under characters/
+  dirPath: string; // absolute path to character directory
 }
 
-/* ---- Load characters from .md files ---- */
+/* ---- Load characters from per-character subdirectories ---- */
 
-function parseCharacterFile(filePath: string): Character | null {
+function parseCharacterDir(charDirPath: string): Character | null {
+  const personaPath = path.join(charDirPath, "persona.md");
+  const dirName = path.basename(charDirPath);
+
+  if (!fs.existsSync(personaPath)) {
+    // Backwards compat: also check for .md file with same name as dir
+    console.warn(`[roleplay] ${dirName}/persona.md not found, skipping`);
+    return null;
+  }
+
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const filename = path.basename(filePath, ".md");
+    const raw = fs.readFileSync(personaPath, "utf-8");
 
     // Parse YAML frontmatter between --- delimiters
     const match = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
     if (!match) {
-      console.warn(`[roleplay] ${filename}.md: no frontmatter found, skipping`);
+      console.warn(`[roleplay] ${dirName}/persona.md: no frontmatter found, skipping`);
       return null;
     }
 
@@ -57,7 +74,7 @@ function parseCharacterFile(filePath: string): Character | null {
     const body = match[2].trim();
 
     if (!body) {
-      console.warn(`[roleplay] ${filename}.md: empty body, skipping`);
+      console.warn(`[roleplay] ${dirName}/persona.md: empty body, skipping`);
       return null;
     }
 
@@ -68,7 +85,7 @@ function parseCharacterFile(filePath: string): Character | null {
       if (kv) meta[kv[1]] = kv[2].trim();
     }
 
-    const name = meta.name || filename;
+    const name = meta.name || dirName;
     const aliases = (meta.aliases || name)
       .split(",")
       .map((a) => a.trim())
@@ -81,10 +98,11 @@ function parseCharacterFile(filePath: string): Character | null {
       model: meta.model || DEFAULT_MODEL,
       temperature: parseFloat(meta.temperature || "") || DEFAULT_TEMPERATURE,
       maxTokens: parseInt(meta.max_tokens || "", 10) || DEFAULT_MAX_TOKENS,
-      filename,
+      dirName,
+      dirPath: charDirPath,
     };
   } catch (err) {
-    console.error(`[roleplay] Failed to parse ${filePath}:`, err);
+    console.error(`[roleplay] Failed to parse ${dirName}/persona.md:`, err);
     return null;
   }
 }
@@ -96,15 +114,96 @@ function loadCharacters(pluginDir: string): Character[] {
     return [];
   }
 
-  const files = fs.readdirSync(charDir).filter((f) => f.endsWith(".md"));
+  const entries = fs.readdirSync(charDir, { withFileTypes: true });
   const chars: Character[] = [];
 
-  for (const file of files) {
-    const char = parseCharacterFile(path.join(charDir, file));
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const char = parseCharacterDir(path.join(charDir, entry.name));
     if (char) chars.push(char);
   }
 
   return chars;
+}
+
+/* ---- Memory (per-character, per-group) ---- */
+
+function getMemoryPath(character: Character, groupKey: string): string {
+  return path.join(character.dirPath, "memory", `${groupKey}.md`);
+}
+
+function readMemory(character: Character, groupKey: string): string {
+  const memPath = getMemoryPath(character, groupKey);
+  try {
+    if (!fs.existsSync(memPath)) return "";
+    let content = fs.readFileSync(memPath, "utf-8").trim();
+    // Truncate to max chars if too long (keep the tail = recent memory)
+    if (content.length > MAX_MEMORY_CHARS) {
+      const lines = content.split("\n");
+      // Keep recent lines that fit within limit
+      const kept: string[] = [];
+      let total = 0;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (total + lines[i].length + 1 > MAX_MEMORY_CHARS) break;
+        kept.unshift(lines[i]);
+        total += lines[i].length + 1;
+      }
+      content = kept.join("\n");
+    }
+    return content;
+  } catch {
+    return "";
+  }
+}
+
+function appendMemory(character: Character, groupKey: string, entry: string): void {
+  const memPath = getMemoryPath(character, groupKey);
+  const memDir = path.dirname(memPath);
+
+  try {
+    // Ensure memory directory exists
+    if (!fs.existsSync(memDir)) {
+      fs.mkdirSync(memDir, { recursive: true });
+    }
+
+    // Read existing content
+    let existing = "";
+    if (fs.existsSync(memPath)) {
+      existing = fs.readFileSync(memPath, "utf-8");
+    }
+
+    // Trim old lines if too many
+    const lines = existing.trim().split("\n").filter(Boolean);
+    if (lines.length >= MAX_MEMORY_LINES) {
+      // Keep only recent half
+      const kept = lines.slice(Math.floor(lines.length / 2));
+      existing = kept.join("\n") + "\n";
+    }
+
+    // Append new entry
+    const timestamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const line = `[${timestamp}] ${entry}\n`;
+    fs.writeFileSync(memPath, existing.trimEnd() + "\n" + line, "utf-8");
+  } catch (err) {
+    console.error(`[roleplay] Failed to write memory for ${character.name}:`, err);
+  }
+}
+
+/* ---- Extract group key from tool call context ---- */
+
+function extractGroupKey(params: Record<string, unknown>): string {
+  // The context param may contain group info, or we use a default
+  const context = (params.context as string | undefined) || "";
+
+  // Try to extract group id from context like "qq-group:689961939" or "群号689961939"
+  const groupMatch = context.match(/(?:qq-group[:\-]?|群号?)(\d{6,})/i);
+  if (groupMatch) return `qq-group-${groupMatch[1]}`;
+
+  const dmMatch = context.match(/(?:qq-dm[:\-]?|私聊)(\d{6,})/i);
+  if (dmMatch) return `qq-dm-${dmMatch[1]}`;
+
+  // Fallback: global (shared across all contexts without group info)
+  return "global";
 }
 
 /* ---- HTTP helper for SiliconFlow (OpenAI-compatible) ---- */
@@ -250,7 +349,7 @@ const plugin = {
     }
 
     if (characters.length === 0) {
-      console.warn("[roleplay] ⚠ No characters found in characters/ folder.");
+      console.warn("[roleplay] ⚠ No characters found in characters/ subdirectories.");
     } else {
       console.log(
         `[roleplay] Loaded ${characters.length} characters: ${characters.map((c) => c.name).join(", ")}`
@@ -261,10 +360,10 @@ const plugin = {
     api.registerTool({
       name: "character_chat",
       label: "角色扮演对话",
-      description: `与不同角色进行对话。每个角色有独立的性格和说话风格，由不同的AI模型驱动。
-当用户想要和特定角色聊天时使用此工具。
-${characters.length > 0 ? `当前可用角色：${characters.map((c) => c.name).join("、")}` : "暂无可用角色。"}
-注意：这些角色来自BanG Dream!系列，回复仅供娱乐。`,
+      description: `与BanG Dream!角色进行对话。每个角色有独立人格、语气和记忆。
+当用户想和特定角色聊天时使用（如"找睦聊天"、"让灯说…"、"问问爱音"）。
+${characters.length > 0 ? `可用角色：${characters.map((c) => c.name).join("、")}` : "暂无可用角色。"}
+注意：丰川祥子是本bot，不在角色列表中。回复由免费模型生成，仅供娱乐。`,
       parameters: Type.Object({
         character: Type.String({
           description: `角色名称或别名。${characters.length > 0 ? `可选：${characters.map((c) => `${c.name}(${c.aliases.slice(0, 3).join("/")})` ).join("、")}` : "暂无"}`,
@@ -274,7 +373,7 @@ ${characters.length > 0 ? `当前可用角色：${characters.map((c) => c.name).
         }),
         context: Type.Optional(
           Type.String({
-            description: "可选的对话上下文/背景信息",
+            description: "对话上下文。请传入当前群标识（如 qq-group:689961939 或 qq-dm:1619287560），用于加载该群的角色记忆。也可附加额外背景信息。",
           })
         ),
       }),
@@ -298,16 +397,36 @@ ${characters.length > 0 ? `当前可用角色：${characters.map((c) => c.name).
           return text(`❌ 找不到角色「${characterQuery}」。${available}`);
         }
 
+        // Extract group key for memory
+        const groupKey = extractGroupKey(params);
+
         console.log(
-          `[roleplay] ${character.name} (${character.model}) ← "${userMessage.slice(0, 50)}"`
+          `[roleplay] ${character.name} (${character.model}) [${groupKey}] ← "${userMessage.slice(0, 50)}"`
         );
 
+        // Build messages: persona + memory + context + user message
         const messages: { role: string; content: string }[] = [
           { role: "system", content: character.systemPrompt },
         ];
 
+        // Inject memory if available
+        const memory = readMemory(character, groupKey);
+        if (memory) {
+          messages.push({
+            role: "system",
+            content: `[对话记忆 — 你之前在这个群里的互动记录，用于保持一致性]\n${memory}`,
+          });
+        }
+
         if (context) {
-          messages.push({ role: "system", content: `[对话背景] ${context}` });
+          // Strip the group key part from context before injecting
+          const cleanContext = context
+            .replace(/qq-group[:\-]?\d+/gi, "")
+            .replace(/qq-dm[:\-]?\d+/gi, "")
+            .trim();
+          if (cleanContext) {
+            messages.push({ role: "system", content: `[对话背景] ${cleanContext}` });
+          }
         }
 
         messages.push({ role: "user", content: userMessage });
@@ -326,6 +445,11 @@ ${characters.length > 0 ? `当前可用角色：${characters.map((c) => c.name).
           console.log(
             `[roleplay] ${character.name} → ${reply.length} chars, ${result.usage?.total_tokens ?? "?"} tokens`
           );
+
+          // Append to memory: one-line summary of this interaction
+          const userSnippet = userMessage.length > 60 ? userMessage.slice(0, 60) + "…" : userMessage;
+          const replySnippet = reply.length > 80 ? reply.slice(0, 80) + "…" : reply;
+          appendMemory(character, groupKey, `用户说「${userSnippet}」→ ${character.name}回复「${replySnippet}」`);
 
           return text(reply);
         } catch (err) {
@@ -360,7 +484,7 @@ ${characters.length > 0 ? `当前可用角色：${characters.map((c) => c.name).
     });
 
     console.log(
-      `[roleplay] Registered 2 tools, ${characters.length} characters`
+      `[roleplay] Registered 2 tools, ${characters.length} characters (per-dir structure with memory)`
     );
   },
 };
